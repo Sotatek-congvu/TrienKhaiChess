@@ -104,7 +104,7 @@ const STRATEGIC_WEIGHTS = {
 // Hằng số điểm
 const CHECKMATE_SCORE = 10000;
 const STALEMATE_SCORE = 0;
-const DEFAULT_DEPTH = 2;
+const DEFAULT_DEPTH = 4;
 
 interface AIMove {
     from?: Position;
@@ -453,33 +453,27 @@ export class ChessAI {
     }
 
     // Tìm nước đi tốt nhất
-    findBestMove(gameState: GameState): AIMove | null {
-        // Xóa bảng tra cứu để tránh chiếm nhiều bộ nhớ
-        this.transpositionTable.clear();
-
-        const currentColor = gameState.currentPlayer;
-        const moves = this.getAllValidMoves(gameState, currentColor);
-
-        if (moves.length === 0) {
-            console.log("Không có nước đi hợp lệ");
-            return null;
-        }
-
+    private iterativeDeepening(gameState: GameState, maxTime: number): AIMove | null {
         let bestMove: AIMove | null = null;
-        let bestScore = currentColor === PieceColor.WHITE ? -Infinity : Infinity;
+        const startTime = Date.now();
+        for (let depth = 1; Date.now() - startTime < maxTime; depth++) {
+            const move = this.findBestMoveAtDepth(gameState, depth);
+            if (move) {
+                bestMove = move;
+            }
+        }
+        return bestMove;
+    }
 
-        // Phân tích song song các nước đi
+    private findBestMoveAtDepth(gameState: GameState, depth: number): AIMove | null {
+        const moves = this.getAllValidMoves(gameState, gameState.currentPlayer);
+        let bestMove: AIMove | null = null;
+        let bestScore = gameState.currentPlayer === PieceColor.WHITE ? -Infinity : Infinity;
+
         for (const move of moves) {
             const newState = this.applyMove(gameState, move);
-            const score = this.minimax(
-                newState,
-                DEFAULT_DEPTH,
-                -Infinity,
-                Infinity,
-                currentColor === PieceColor.BLACK
-            );
-
-            if (currentColor === PieceColor.WHITE) {
+            const score = this.minimax(newState, depth, -Infinity, Infinity, gameState.currentPlayer === PieceColor.BLACK);
+            if (gameState.currentPlayer === PieceColor.WHITE) {
                 if (score > bestScore) {
                     bestScore = score;
                     bestMove = move;
@@ -491,8 +485,11 @@ export class ChessAI {
                 }
             }
         }
-
         return bestMove;
+    }
+
+    findBestMove(gameState: GameState): AIMove | null {
+        return this.iterativeDeepening(gameState, 1000); // 2 giây
     }
 }
 
