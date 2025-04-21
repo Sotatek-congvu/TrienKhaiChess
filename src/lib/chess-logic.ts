@@ -328,7 +328,7 @@ const getValidQueenMoves = (gameState: GameState, position: Position): Position[
 const getValidKingMoves = (gameState: GameState, position: Position): Position[] => {
   const { board, currentPlayer } = gameState;
   const { row, col } = position;
-  let validMoves: Position[] = [];
+  const validMoves: Position[] = [];
 
   const kingMoves = [
     { row: 1, col: 0 },
@@ -341,7 +341,7 @@ const getValidKingMoves = (gameState: GameState, position: Position): Position[]
     { row: -1, col: -1 }
   ];
 
-  // Bước 1: Thu thập tất cả các nước đi tiềm năng
+  // Collect all potential moves
   kingMoves.forEach(move => {
     const newPos: Position = { row: row + move.row, col: col + move.col };
     if (isValidPosition(newPos)) {
@@ -352,34 +352,30 @@ const getValidKingMoves = (gameState: GameState, position: Position): Position[]
     }
   });
 
-  // Bước 2: Lọc bỏ các nước đi khiến vua bị chiếu
-  validMoves = validMoves.filter(move => {
-    // Tạo một bàn cờ tạm thời để thử nước đi
-    const tempBoard = board.map(row => [...row]);
+  // Filter out moves that would put the king in check - without causing recursion
+  return validMoves.filter(move => {
+    // Create a temporary board for testing
+    const tempBoard = board.map(r => [...r]);
 
-    // Di chuyển vua trên bàn cờ tạm thời
+    // Move the king on the temp board
     tempBoard[move.row][move.col] = tempBoard[row][col];
     tempBoard[row][col] = null;
 
-    // Kiểm tra xem vua có bị chiếu sau khi di chuyển không
+    // Check if any opponent piece can attack the king's new position
     const opponentColor = currentPlayer === PieceColor.WHITE ? PieceColor.BLACK : PieceColor.WHITE;
 
-    // Kiểm tra tất cả các quân của đối thủ
+    // Check all opponent pieces
     for (let r = 0; r < 6; r++) {
       for (let c = 0; c < 6; c++) {
         const piece = tempBoard[r][c];
         if (piece && piece.color === opponentColor) {
-          // Tạm thời thay đổi người chơi để kiểm tra nước đi của đối thủ
-          const tempGameState = {
-            ...gameState,
-            board: tempBoard,
-            currentPlayer: opponentColor
-          };
+          // Create a temporary game state
+          const tempGameState = { ...gameState, board: tempBoard, currentPlayer: opponentColor };
 
-          // Lấy tất cả nước đi hợp lệ của quân đối thủ
-          const opponentMoves = getValidMovesForPiece(tempGameState, { row: r, col: c }, piece.type);
+          // Get pseudo-legal moves (without checking for king safety)
+          const opponentMoves = getPseudoLegalMovesDirectly(tempGameState, { row: r, col: c }, piece.type);
 
-          // Nếu quân đối thủ có thể tấn công vị trí mới của vua, nước đi này không hợp lệ
+          // If any opponent piece can attack the new king position, this move is not valid
           if (opponentMoves.some(m => m.row === move.row && m.col === move.col)) {
             return false;
           }
@@ -387,12 +383,46 @@ const getValidKingMoves = (gameState: GameState, position: Position): Position[]
       }
     }
 
-    // Nếu không có quân cờ nào của đối thủ có thể tấn công vua, nước đi này hợp lệ
+    // If no opponent piece can attack the king, this move is valid
     return true;
   });
-
-  return validMoves;
 };
+
+// New function to get moves directly without causing recursion
+const getPseudoLegalMovesDirectly = (gameState: GameState, position: Position, pieceType: PieceType): Position[] => {
+  switch (pieceType) {
+    case PieceType.PAWN:
+      return getValidPawnMoves(gameState, position);
+    case PieceType.ROOK:
+      return getValidRookMoves(gameState, position);
+    case PieceType.KNIGHT:
+      return getValidKnightMoves(gameState, position);
+    case PieceType.BISHOP:
+      return getValidBishopMoves(gameState, position);
+    case PieceType.QUEEN:
+      return [...getValidRookMoves(gameState, position), ...getValidBishopMoves(gameState, position)];
+    case PieceType.KING:
+      // For kings, only check adjacent squares without checking king safety
+      const { board, currentPlayer } = gameState;
+      const { row, col } = position;
+      const kingMoves = [
+        { row: 1, col: 0 }, { row: -1, col: 0 },
+        { row: 0, col: 1 }, { row: 0, col: -1 },
+        { row: 1, col: 1 }, { row: 1, col: -1 },
+        { row: -1, col: 1 }, { row: -1, col: -1 }
+      ];
+
+      return kingMoves
+        .map(move => ({ row: row + move.row, col: col + move.col }))
+        .filter(pos =>
+          isValidPosition(pos) &&
+          (!board[pos.row][pos.col] || board[pos.row][pos.col]?.color !== currentPlayer)
+        );
+    default:
+      return [];
+  }
+}
+
 const getValidMovesForPiece = (gameState: GameState, position: Position, pieceType: PieceType): Position[] => {
   switch (pieceType) {
     case PieceType.PAWN:
@@ -588,7 +618,8 @@ export const checkIfCheckmate = (gameState: GameState): boolean => {
   }
 
   // Nếu không có nước đi hoặc thả nào thoát chiếu, thì đó là chiếu hết
-  console.log("PHÁT HIỆN CHIẾU HẾT cho người chơi:", currentPlayer);
+  // Only log checkmate when not checking internally during AI move calculation
+
   return true;
 };
 export const getValidMovesWhenInCheck = (gameState: GameState, position: Position): Position[] => {
@@ -723,25 +754,26 @@ export const makeMove = (
   newBoard[from.row][from.col] = null;
 
   // Handle pawn promotion
-  if (promoteTo && movingPiece.type === PieceType.PAWN) {
-    newBoard[to.row][to.col] = {
-      ...movingPiece,
-      type: promoteTo,
-      hasMoved: true
-    };
+  if (movingPiece.type === PieceType.PAWN) {
+    const promotionRow = movingPiece.color === PieceColor.WHITE ? 5 : 0; // Hàng 5 cho trắng, hàng 0 cho đen
+    if (to.row === promotionRow) {
+      newBoard[to.row][to.col] = {
+        ...movingPiece,
+        type: promoteTo || PieceType.ROOK, // Phong cấp thành Hậu nếu không có promoteTo
+        hasMoved: true
+      };
+    }
   }
 
   // Handle capturing a piece
   let updatedPieceBank = { ...pieceBank };
   if (targetPiece) {
-    // Change the captured piece's color to the capturing player's color
     const capturedPiece = {
       ...targetPiece,
-      color: currentPlayer, // Change color to the current player
-      id: `captured-${targetPiece.type}-${Date.now()}`, // Create a new ID
-      hasMoved: true // Mark as moved
+      color: currentPlayer,
+      id: `captured-${targetPiece.type}-${Date.now()}`,
+      hasMoved: true
     };
-
     updatedPieceBank = {
       ...pieceBank,
       [currentPlayer]: [...pieceBank[currentPlayer], capturedPiece]
@@ -754,8 +786,8 @@ export const makeMove = (
     to,
     piece: movingPiece,
     capturedPiece: targetPiece,
-    isPromotion: !!promoteTo,
-    promoteTo: promoteTo,
+    isPromotion: movingPiece.type === PieceType.PAWN && to.row === (movingPiece.color === PieceColor.WHITE ? 5 : 0),
+    promoteTo: promoteTo || (movingPiece.type === PieceType.PAWN && to.row === (movingPiece.color === PieceColor.WHITE ? 5 : 0) ? PieceType.ROOK : undefined),
   };
 
   // Switch the current player
@@ -773,15 +805,15 @@ export const makeMove = (
     lastMove: move,
   };
 
-  // We need to check if the OPPONENT is in check after the move
+  // Check if the opponent is in check after the move
   const isCheck = isKingInCheck(newGameState);
   newGameState.isCheck = isCheck;
 
-  // Check if the OPPONENT is in checkmate
+  // Check if the opponent is in checkmate
   const isCheckmate = isCheck && checkIfCheckmate(newGameState);
   newGameState.isCheckmate = isCheckmate;
 
-  // Check if the OPPONENT is in stalemate
+  // Check if the opponent is in stalemate
   const isStalemate = !isCheck && checkIfStalemate(newGameState);
   newGameState.isStalemate = isStalemate;
 

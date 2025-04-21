@@ -70,7 +70,10 @@ const ChessBoard: FC<ChessBoardProps> = ({
   }, [gameState.isCheckmate, gameState.currentPlayer]);
 
   const handlePieceBankSelect = (piece: ChessPieceType) => {
-    if (disabled) return;
+    if (disabled) {
+      return;
+    }
+
     if (piece.color !== gameState.currentPlayer) {
       toast.error("Chỉ có thể thả quân trong lượt của bạn!", {
         duration: 3000,
@@ -93,7 +96,9 @@ const ChessBoard: FC<ChessBoardProps> = ({
 
   const handleSquareClick = (position: Position) => {
     const { board, currentPlayer } = gameState;
-    if (disabled) return;
+    if (disabled) {
+      return;
+    }
 
     if (isDroppingPiece) {
       if (validMoves.some(move => move.row === position.row && move.col === position.col)) {
@@ -194,6 +199,15 @@ const ChessBoard: FC<ChessBoardProps> = ({
         position: "top-center",
       });
     }
+  };
+
+  const handleReviewBoard = () => {
+    setShowCheckmateModal(false);
+
+    toast.info("Hãy xem lại bàn cờ để hiểu tại sao bị chiếu hết!", {
+      duration: 4000,
+      position: "top-center",
+    });
   };
 
   const isLightSquare = (row: number, col: number) => (row + col) % 2 === 0;
@@ -382,7 +396,8 @@ const ChessBoard: FC<ChessBoardProps> = ({
 
       <CheckmateModal
         winner={gameState.currentPlayer === PieceColor.WHITE ? PieceColor.BLACK : PieceColor.WHITE}
-        onNewGame={handleNewGame || (() => { })}
+        onNewGame={handleNewGame}
+        onReview={handleReviewBoard}
         open={showCheckmateModal}
       />
     </div>

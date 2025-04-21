@@ -1,20 +1,17 @@
-
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
+import { GameState, PieceColor } from '@/lib/chess-models';
 import ChessBoard from '@/components/ChessBoard';
-import MoveHistory from '@/components/MoveHistory';
 import GameControls from '@/components/GameControls';
+import MoveHistory from '@/components/MoveHistory';
 import GameInfo from '@/components/GameInfo';
 import GameRules from '@/components/GameRules';
+import { useStockfish } from '@/hooks/use-stockfish';
+import { useCallback } from 'react';
 import { Button } from '@/components/ui/button';
-import { HelpCircle } from 'lucide-react';
-import ChessAI from '@/lib/chess-ai';
-import { makeMove, dropPiece } from '@/lib/chess-logic';
-import { Cpu } from 'lucide-react';
-import { Switch } from '@/components/ui/switch';
+import { HelpCircle, Cpu } from 'lucide-react';
+import { toast } from "sonner";
 import {
-  createInitialGameState,
-  GameState,
-  PieceColor
+  createInitialGameState
 } from '@/lib/chess-models';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -23,95 +20,110 @@ const Index = () => {
   const [boardPerspective, setBoardPerspective] = useState<PieceColor>(PieceColor.WHITE);
   const [gameStateHistory, setGameStateHistory] = useState<GameState[]>([createInitialGameState()]);
   const [showRules, setShowRules] = useState<boolean>(true);
-  const [playAgainstAI, setPlayAgainstAI] = useState<boolean>(false);
-  const [isAIThinking, setIsAIThinking] = useState<boolean>(false);
-  const ai = new ChessAI();
-  const toggleAI = () => {
-    const newValue = !playAgainstAI;
-    console.log("Bật/tắt AI:", newValue);
-    setPlayAgainstAI(newValue);
+  const [playAgainstAI, setPlayAgainstAI] = useState<boolean>(true); // Mặc định bật AI
 
-    // Nếu bật AI và lượt hiện tại là của AI (đen)
-    if (newValue && gameState.currentPlayer === PieceColor.BLACK) {
-      console.log("Lượt hiện tại là của đen, gọi AI đi...");
-      makeAIMove(gameState);
-    }
-  };
-  // Sửa hàm makeAIMove để thêm log
-  const makeAIMove = async (state: GameState) => {
-    console.log("AI bắt đầu suy nghĩ...");
-    setIsAIThinking(true);
+  // Sử dụng hook Stockfish - đã được cập nhật để luôn sử dụng chế độ khó nhất
+  const { isThinking, makeMove: makeMoveAI } = useStockfish({
+    enabled: playAgainstAI,
+    aiColor: PieceColor.BLACK,
+    onAIMove: (newState) => {
+      setGameState(newState);
+      setGameStateHistory(prev => [...prev, newState]);
 
-    setTimeout(() => {
-      try {
-        console.log("Trạng thái game trước khi AI đi:", state);
-        console.log("Lượt hiện tại:", state.currentPlayer);
-
-        const bestMove = ai.findBestMove(state);
-        console.log("Nước đi tốt nhất của AI:", bestMove);
-
-        if (bestMove) {
-          let newState: GameState;
-
-          if (bestMove.from) {
-            // Di chuyển quân
-            console.log(`AI di chuyển quân từ (${bestMove.from.row},${bestMove.from.col}) đến (${bestMove.to.row},${bestMove.to.col})`);
-            newState = makeMove(state, bestMove.from, bestMove.to);
-          } else if (bestMove.piece) {
-            // Thả quân
-            console.log(`AI thả quân ${bestMove.piece.type} tại (${bestMove.to.row},${bestMove.to.col})`);
-            newState = dropPiece(state, bestMove.piece, bestMove.to);
-          } else {
-            console.log("AI không tìm thấy nước đi hợp lệ");
-            newState = state;
-          }
-
-          setGameState(newState);
-          setGameStateHistory(prev => [...prev, newState]);
-        } else {
-          console.log("AI không trả về nước đi nào");
-        }
-      } catch (error) {
-        console.error("Lỗi trong nước đi của AI:", error);
-      } finally {
-        setIsAIThinking(false);
+      if (newState.isCheckmate) {
+        toast.success("AI Lỏ đã chiếu hết bạn!", {
+          description: "Thật tiếc! Thử lại nước nữa nhé?",
+          duration: 5000,
+        });
+      } else if (newState.isCheck) {
+        toast.warning("Chiếu!", {
+          description: "Vua của bạn đang bị đe dọa!",
+        });
       }
-    }, 800);
-  };
+    }
+  });
 
-  // Sửa điều kiện trong hàm handleMove
-  const handleMove = (newState: GameState) => {
+  // Kích hoạt AI khi trang được khởi tạo
+  useEffect(() => {
+    // Nếu lượt hiện tại là của AI (đen), cho AI đi
+    if (playAgainstAI && gameState.currentPlayer === PieceColor.BLACK) {
+      console.log("Lượt hiện tại là của đen, gọi AI đi...");
+      setTimeout(() => {
+        makeMoveAI(gameState);
+      }, 500);
+    }
+  }, []);
+
+  const toggleAI = useCallback((enabled: boolean) => {
+    console.log("Bật/tắt AI:", enabled);
+    setPlayAgainstAI(enabled);
+
+    // Thông báo khi bật/tắt AI
+    if (enabled) {
+      toast.info("Đã bật AI Lỏ", {
+        description: "AI đang sử dụng chế độ thông minh nhất"
+      });
+
+      // Nếu bật AI và lượt hiện tại là của AI (đen)
+      if (gameState.currentPlayer === PieceColor.BLACK) {
+        console.log("Lượt hiện tại là của đen, gọi AI đi...");
+        makeMoveAI(gameState);
+      }
+    } else {
+      toast.info("Đã tắt AI");
+    }
+  }, [gameState, makeMoveAI]);
+
+  // Xử lý nước đi của người chơi
+  const handleMove = useCallback((newState: GameState) => {
     setGameState(newState);
     setGameStateHistory(prev => [...prev, newState]);
 
+    // Thông báo khi chiếu hoặc chiếu hết
+    if (newState.isCheckmate) {
+      const winner = newState.currentPlayer === PieceColor.WHITE ? "Đen" : "Trắng";
+      toast.success(`Chiếu hết! ${winner} thắng!`, { duration: 5000 });
+    } else if (newState.isCheck) {
+      toast.warning("Chiếu!");
+    }
+
     console.log("Sau khi người chơi đi, lượt hiện tại:", newState.currentPlayer);
-    console.log("Play Against AI:", playAgainstAI);
 
     // Nếu đang chơi với AI và đến lượt AI
-    if (playAgainstAI && newState.currentPlayer === PieceColor.BLACK && !newState.isCheckmate) {
-      console.log("Gọi AI đi...");
-      makeAIMove(newState);
+    if (playAgainstAI && newState.currentPlayer === PieceColor.BLACK && !newState.isCheckmate && !newState.isStalemate) {
+      console.log("Đến lượt AI đi...");
+
+      // Thêm thời gian trễ trước khi AI di chuyển
+      toast.info("AI Lỏ đang suy nghĩ...", { duration: 1500 });
+
+      setTimeout(() => {
+        makeMoveAI(newState);
+      }, 1500); // Đợi 1.5 giây trước khi AI thực hiện nước đi
     }
-  };
+  }, [playAgainstAI, makeMoveAI]);
 
-
-
-  const handleNewGame = () => {
+  const handleNewGame = useCallback(() => {
     const initialState = createInitialGameState();
     setGameState(initialState);
     setGameStateHistory([initialState]);
-    if (playAgainstAI && initialState.currentPlayer === PieceColor.BLACK) {
-      makeAIMove(initialState);
-    }
-  };
 
-  const handleFlipBoard = () => {
+    toast.info("Trò chơi mới đã bắt đầu!");
+
+    if (playAgainstAI && initialState.currentPlayer === PieceColor.BLACK) {
+      // Cho AI đi sau một chút để người chơi thấy bàn cờ mới
+      setTimeout(() => {
+        makeMoveAI(initialState);
+      }, 500);
+    }
+  }, [playAgainstAI, makeMoveAI]);
+
+  const handleFlipBoard = useCallback(() => {
     setBoardPerspective(prev =>
       prev === PieceColor.WHITE ? PieceColor.BLACK : PieceColor.WHITE
     );
-  };
+  }, []);
 
-  const handleUndoMove = () => {
+  const handleUndoMove = useCallback(() => {
     if (gameStateHistory.length <= 1) return;
 
     const previousStates = [...gameStateHistory];
@@ -126,7 +138,10 @@ const Index = () => {
     const previousState = trimmedStates[trimmedStates.length - 1];
     setGameState(previousState);
     setGameStateHistory(trimmedStates);
-  };
+
+    toast.info("Đã đi lại nước trước");
+  }, [gameStateHistory, playAgainstAI]);
+
   return (
     <div className="min-h-screen bg-[#312e2b] text-white p-4">
       <div className="max-w-5xl mx-auto">
@@ -143,16 +158,16 @@ const Index = () => {
             Cờ vua 6x6 với luật Crazyhouse - thả quân đã bắt
           </p>
 
-          {/* Thay thế nút Button hiện tại bằng div này */}
           <div className="absolute right-0 top-0 flex items-center gap-2">
-            <div className="flex items-center">
-              <Cpu size={16} className="mr-1 text-gray-300" />
-              <label className="text-sm text-gray-300 mr-2">AI</label>
-              <Switch
-                checked={playAgainstAI}
-                onCheckedChange={toggleAI}
-              />
-            </div>
+            <Button
+              variant={playAgainstAI ? "default" : "outline"}
+              size="sm"
+              className="flex items-center gap-1"
+              onClick={() => toggleAI(!playAgainstAI)}
+            >
+              <Cpu size={16} />
+              {playAgainstAI ? "Tắt AI" : "Bật AI"}
+            </Button>
 
             <Button
               variant="ghost"
@@ -177,6 +192,7 @@ const Index = () => {
               onMove={handleMove}
               perspective={boardPerspective}
               onNewGame={handleNewGame}
+              disabled={isThinking} // Vô hiệu hóa bàn cờ khi AI đang suy nghĩ
             />
           </motion.div>
 
@@ -191,6 +207,9 @@ const Index = () => {
               onNewGame={handleNewGame}
               onFlipBoard={handleFlipBoard}
               onUndoMove={handleUndoMove}
+              aiMode={playAgainstAI}
+              onToggleAI={toggleAI}
+              isThinking={isThinking}
             />
 
             <GameInfo gameState={gameState} />
