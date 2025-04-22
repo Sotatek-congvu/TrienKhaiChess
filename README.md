@@ -1,6 +1,6 @@
 # Chessmihouse 6×6 - Cờ vua 6×6 với luật Crazyhouse
 
-![Chessmihouse Logo](./public/og-image.png)
+![Chessmihouse Logo](./public/favicon.ico)
 
 ## Giới thiệu
 
