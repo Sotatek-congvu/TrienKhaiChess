@@ -1,6 +1,6 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { GameState, PieceColor } from '@/lib/chess-models';
-import { getStockfishService } from '@/lib/stockfish-service';
+import { getStockfishService } from '@/lib/chessengine/stockfish-service';
 
 interface UseStockfishProps {
     enabled: boolean;
@@ -10,28 +10,31 @@ interface UseStockfishProps {
 
 export const useStockfish = ({ enabled, aiColor, onAIMove }: UseStockfishProps) => {
     const [isThinking, setIsThinking] = useState(false);
-    const [thinkingTimeout, setThinkingTimeout] = useState<NodeJS.Timeout | null>(null);
+    const thinkingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const cancelledRef = useRef<boolean>(false);
 
-    // Tối ưu: Giảm thời gian chờ tối đa xuống 2 giây
-    const MAX_THINKING_TIME = 2000;
+    // Tăng thời gian chờ lên 5 giây để giảm số lần timeout
+    const MAX_THINKING_TIME = 5000;
 
     // Giữ tham chiếu đến service
     const stockfishService = getStockfishService();
 
-    // Tối ưu: Thêm cơ chế timeout để tránh chờ quá lâu
+    // Cải thiện: Thêm cơ chế timeout có thể hủy để tránh chờ quá lâu
     const getAIMove = useCallback(
         async (gameState: GameState): Promise<GameState> => {
             try {
                 setIsThinking(true);
+                cancelledRef.current = false;
 
                 // Thiết lập timeout để tránh treo giao diện
                 const timeoutPromise = new Promise<GameState>((resolve) => {
                     const timer = setTimeout(() => {
                         console.warn('AI thinking timeout reached, returning current best move');
+                        cancelledRef.current = true;
                         resolve(gameState);
                     }, MAX_THINKING_TIME);
 
-                    setThinkingTimeout(timer);
+                    thinkingTimeoutRef.current = timer;
                 });
 
                 // Chạy AI trong một Promise
@@ -45,14 +48,14 @@ export const useStockfish = ({ enabled, aiColor, onAIMove }: UseStockfishProps) 
                 return gameState;
             } finally {
                 // Xóa timeout nếu có
-                if (thinkingTimeout) {
-                    clearTimeout(thinkingTimeout);
-                    setThinkingTimeout(null);
+                if (thinkingTimeoutRef.current) {
+                    clearTimeout(thinkingTimeoutRef.current);
+                    thinkingTimeoutRef.current = null;
                 }
                 setIsThinking(false);
             }
         },
-        [thinkingTimeout, stockfishService]
+        [stockfishService]
     );
 
     // Thêm makeMove function để phù hợp với cách gọi trong Index.tsx
@@ -64,7 +67,7 @@ export const useStockfish = ({ enabled, aiColor, onAIMove }: UseStockfishProps) 
 
             try {
                 const newState = await getAIMove(gameState);
-                if (newState) {
+                if (newState && !cancelledRef.current) {
                     onAIMove(newState);
                 }
             } catch (error) {
@@ -92,13 +95,13 @@ export const useStockfish = ({ enabled, aiColor, onAIMove }: UseStockfishProps) 
 
         return () => {
             // Xóa timeout nếu có
-            if (thinkingTimeout) {
-                clearTimeout(thinkingTimeout);
+            if (thinkingTimeoutRef.current) {
+                clearTimeout(thinkingTimeoutRef.current);
             }
             // Dừng engine khi unmount
             service.stop();
         };
-    }, [thinkingTimeout]);
+    }, []);
 
     return {
         isThinking,

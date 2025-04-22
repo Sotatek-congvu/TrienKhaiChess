@@ -1,6 +1,6 @@
-import { GameState, PieceType, PieceColor, Position, positionToAlgebraic, algebraicToPosition, ChessPiece } from './chess-models';
-import { makeMove, dropPiece, isKingInCheck } from './chess-logic';
-import ChessAI from './chess-ai'; // Import the existing AI as fallback
+import { GameState, PieceType, PieceColor, Position, positionToAlgebraic, algebraicToPosition, ChessPiece } from '../chess-models';
+import { makeMove, dropPiece, isKingInCheck } from '../chess-logic';
+import ChessAI from '../chess-ai'; // Import the existing AI as fallback
 import { createStockfishWorker } from './stockfish-worker';
 import { StockfishAdapter } from './stockfish-adapter';
 
@@ -18,8 +18,8 @@ type DropPreference = 'normal' | 'aggressive' | 'defensive' | 'balanced';
 export class StockfishService {
     private engine: Worker | null = null;
     private isReady: boolean = false;
-    private moveTimeout: number = 1500; // Giảm từ 10000ms xuống 1500ms
-    private searchDepth: number = 18;  // Giảm từ 40 xuống 18
+    private moveTimeout: number = 5000; // Giảm từ 10000ms xuống 5000ms
+    private searchDepth: number = 3;  // Giảm từ 18 xuống 3
     private resolveMove: ((move: StockfishMove | null) => void) | null = null;
     private skillLevel: number = 20; // Mức kỹ năng cao nhất
     private fallbackAI: ChessAI | null = null; // Add fallback AI property
@@ -178,8 +178,8 @@ export class StockfishService {
     // Chỉ giữ một cấp độ khó nhất với tất cả thông số được tối ưu hóa
     public setMaxDifficulty(): void {
         this.skillLevel = 20;
-        this.moveTimeout = 1500;
-        this.searchDepth = 18;
+        this.moveTimeout = 1000; // Giảm từ 1500ms xuống 1000ms
+        this.searchDepth = 3;  // Giảm từ 18 xuống 3
         this.multiPV = 4;
         this.contempt = 0;
         this.threads = Math.max(navigator.hardwareConcurrency || 4, 6);
@@ -199,11 +199,11 @@ export class StockfishService {
         console.log(`Đã thiết lập AI ở tốc độ tối ưu: độ sâu ${this.searchDepth}, thời gian ${this.moveTimeout}ms, ${this.threads} luồng`);
 
         if (this.fallbackAI) {
-            this.fallbackAI.setDifficulty('grandmaster');
+            this.fallbackAI.setDifficulty('medium'); // Giảm từ grandmaster xuống medium
             this.fallbackAI.setHybridMode(true);
         }
 
-        this.chessAI.setDifficulty('grandmaster');
+        this.chessAI.setDifficulty('medium'); // Giảm từ grandmaster xuống medium
     }
 
     // Lấy nước đi tốt nhất từ Stockfish
@@ -275,10 +275,10 @@ export class StockfishService {
                 const move = this.chessAI.findBestMove(gameState);
                 if (move) {
                     if (move.from && move.to) {
-                        const { makeMove } = await import('./chess-logic');
+                        const { makeMove } = await import('../chess-logic');
                         return makeMove(gameState, move.from, move.to);
                     } else if (move.piece && move.to) {
-                        const { dropPiece } = await import('./chess-logic');
+                        const { dropPiece } = await import('../chess-logic');
                         return dropPiece(gameState, move.piece, move.to);
                     }
                 }
@@ -324,8 +324,8 @@ export class StockfishService {
             try {
                 // Ưu tiên thả quân để tạo đe dọa và tấn công
                 const DROP_TACTICS = {
-                    ATTACK_KING: 300,         // Tăng mạnh ưu tiên thả quân để tấn công vua
-                    ATTACK_UNDEFENDED: 250,    // Tăng mạnh ưu tiên tấn công quân không được bảo vệ
+                    ATTACK_KING: 200,         // Tăng mạnh ưu tiên thả quân để tấn công vua
+                    ATTACK_UNDEFENDED: 300,    // Tăng mạnh ưu tiên tấn công quân không được bảo vệ
                     FORK_OPPORTUNITY: 280,     // Tăng ưu tiên thả quân tạo fork
                     BLOCK_CHECK: 150,          // Giảm ưu tiên chặn chiếu (vẫn cần để phòng thủ)
                     GAIN_CENTER_CONTROL: 120,  // Tăng nhẹ kiểm soát trung tâm

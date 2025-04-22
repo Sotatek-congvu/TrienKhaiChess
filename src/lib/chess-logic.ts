@@ -757,9 +757,17 @@ export const makeMove = (
   if (movingPiece.type === PieceType.PAWN) {
     const promotionRow = movingPiece.color === PieceColor.WHITE ? 5 : 0; // Hàng 5 cho trắng, hàng 0 cho đen
     if (to.row === promotionRow) {
+      // Kiểm tra loại quân được chọn để phong cấp
+      let promotionType = promoteTo || PieceType.ROOK; // Mặc định phong thành Xe
+
+      // Giới hạn phong cấp cho cả tốt đen và tốt trắng chỉ còn mã, tượng và xe
+      if (promotionType === PieceType.QUEEN) {
+        promotionType = PieceType.ROOK; // Nếu chọn Hậu, đổi thành Xe
+      }
+
       newBoard[to.row][to.col] = {
         ...movingPiece,
-        type: promoteTo || PieceType.ROOK, // Phong cấp thành Hậu nếu không có promoteTo
+        type: promotionType,
         hasMoved: true
       };
     }

@@ -14,6 +14,7 @@ import { getValidMoves, makeMove, getValidDropSquares, dropPiece } from '@/lib/c
 import { cn } from '@/lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
+import { useAudio } from '@/hooks/use-audio'; // Thêm import useAudio
 
 interface ChessBoardProps {
   gameState: GameState;
@@ -38,6 +39,7 @@ const ChessBoard: FC<ChessBoardProps> = ({
   const [isDroppingPiece, setIsDroppingPiece] = useState<ChessPieceType | null>(null);
   const [dropHighlight, setDropHighlight] = useState<boolean>(false);
   const [showCheckmateModal, setShowCheckmateModal] = useState<boolean>(false);
+  const { playSound, isMuted, toggleMute } = useAudio(); // Sử dụng hook useAudio
 
   const boardRows = [...Array(6).keys()];
   const boardCols = [...Array(6).keys()];
@@ -69,6 +71,38 @@ const ChessBoard: FC<ChessBoardProps> = ({
     }
   }, [gameState.isCheckmate, gameState.currentPlayer]);
 
+  // Thêm useEffect mới để phát âm thanh khi gameState thay đổi (cho cả nước đi của AI)
+  useEffect(() => {
+    // Bỏ qua lần render đầu tiên
+    if (!gameState.lastMove) return;
+
+    const { lastMove, isCheck, isCheckmate, isStalemate } = gameState;
+
+    // Kiểm tra xem nước đi cuối cùng có phải là thả quân không
+    if (lastMove.isDropped) {
+      playSound('drop');
+    } else {
+      // Kiểm tra xem nước đi cuối cùng có phải là ăn quân không
+      const isCapture = lastMove.capturedPiece !== null && lastMove.capturedPiece !== undefined;
+
+      // Phát âm thanh dựa vào loại nước đi
+      if (isCapture) {
+        playSound('capture');
+      } else {
+        playSound('move');
+      }
+    }
+
+    // Phát âm thanh cho các trạng thái đặc biệt
+    if (isCheckmate) {
+      playSound('checkmate');
+    } else if (isCheck) {
+      playSound('check');
+    } else if (isStalemate) {
+      playSound('gameOver');
+    }
+  }, [gameState.moveHistory.length, gameState.lastMove, playSound]);
+
   const handlePieceBankSelect = (piece: ChessPieceType) => {
     if (disabled) {
       return;
@@ -82,6 +116,7 @@ const ChessBoard: FC<ChessBoardProps> = ({
       return;
     }
 
+    playSound('drop'); // Phát âm thanh khi chọn quân để thả
     setSelectedPosition(null);
     setIsDroppingPiece(piece);
     setDropHighlight(true);
@@ -105,12 +140,17 @@ const ChessBoard: FC<ChessBoardProps> = ({
         const newState = dropPiece(gameState, isDroppingPiece, position);
         onMove(newState);
 
+        // Phát âm thanh khi thả quân thành công
+        playSound('drop');
+
         if (newState.isCheckmate) {
           const winner = currentPlayer;
           const winnerText = winner === PieceColor.WHITE ? "Trắng" : "Đen";
           toast.success(`Chiếu hết! ${winnerText} thắng!`);
+          playSound('checkmate');
         } else if (newState.isCheck) {
           toast.warning('Chiếu!');
+          playSound('check');
         }
       }
       setIsDroppingPiece(null);
@@ -145,14 +185,27 @@ const ChessBoard: FC<ChessBoardProps> = ({
       const newState = makeMove(gameState, selectedPosition, position);
       onMove(newState);
 
+      // Kiểm tra xem nước đi có ăn quân của đối thủ không
+      const isCapture = board[position.row][position.col] !== null;
+
+      // Phát âm thanh tương ứng
+      if (isCapture) {
+        playSound('capture');
+      } else {
+        playSound('move');
+      }
+
       if (newState.isCheckmate) {
         const winner = currentPlayer;
         const winnerText = winner === PieceColor.WHITE ? "Trắng" : "Đen";
         toast.success(`Chiếu hết! ${winnerText} thắng!`);
+        playSound('checkmate');
       } else if (newState.isStalemate) {
         toast.info('Stalemate! The game is a draw.');
+        playSound('gameOver');
       } else if (newState.isCheck) {
         toast.warning('Chiếu!');
+        playSound('check');
       }
 
       setSelectedPosition(null);
@@ -177,11 +230,16 @@ const ChessBoard: FC<ChessBoardProps> = ({
     const newState = makeMove(gameState, selectedPosition, promotionPosition, promoteTo);
     onMove(newState);
 
+    // Phát âm thanh khi phong cấp
+    playSound('promote');
+
     if (newState.isCheckmate) {
       const winner = gameState.currentPlayer === PieceColor.WHITE ? "Trắng" : "Đen";
       toast.success(`Chiếu hết! ${winner} thắng!`);
+      playSound('checkmate');
     } else if (newState.isCheck) {
       toast.warning('Chiếu!');
+      playSound('check');
     }
 
     setSelectedPosition(null);
@@ -193,6 +251,9 @@ const ChessBoard: FC<ChessBoardProps> = ({
     if (onNewGame) {
       onNewGame();
       setShowCheckmateModal(false);
+
+      // Phát âm thanh khi bắt đầu trò chơi mới
+      playSound('start');
 
       toast.success("Trò chơi mới đã bắt đầu!", {
         duration: 3000,
@@ -238,6 +299,41 @@ const ChessBoard: FC<ChessBoardProps> = ({
       piece.color === gameState.currentPlayer;
   };
 
+  // Thêm hàm mới để đánh giá thả quân trực quan
+  const getDropSquareHighlightClass = (position: Position): string => {
+    if (!isDroppingPiece || !validMoves.some(move => move.row === position.row && move.col === position.col)) {
+      return '';
+    }
+
+    // Phân loại các vị trí thả quân theo chất lượng
+    // Sử dụng SPECIAL_DROP_POSITIONS từ thư viện chess-ai
+    const piece = isDroppingPiece;
+    if (!piece) return 'drop-target'; // Class mặc định
+
+    // Kiểm tra vị trí đặc biệt
+    if (piece.type === PieceType.KNIGHT) {
+      // Kiểm tra outpost cho mã
+      const centerRows = piece.color === PieceColor.WHITE ? [3, 4] : [2, 1];
+      const isCenterSquare = centerRows.includes(position.row) && position.col >= 1 && position.col <= 4;
+
+      if (isCenterSquare) return 'drop-target-optimal';
+    }
+
+    // Kiểm tra vị trí để thả tốt phong cấp
+    if (piece.type === PieceType.PAWN) {
+      const promotionRow = piece.color === PieceColor.WHITE ? 4 : 1;
+      if (position.row === promotionRow) {
+        return 'drop-target-optimal';
+      }
+    }
+
+    // Kiểm tra nếu là vị trí trung tâm
+    const isCenter = (position.row === 2 || position.row === 3) && (position.col === 2 || position.col === 3);
+    if (isCenter) return 'drop-target-good';
+
+    return 'drop-target';
+  };
+
   return (
     <div className="flex flex-col md:flex-row items-start gap-4">
       <div className="md:w-48 space-y-4">
@@ -280,7 +376,8 @@ const ChessBoard: FC<ChessBoardProps> = ({
                     isLightSquare(actualRow, actualCol) ? "bg-board-light" : "bg-board-dark",
                     isPartOfLastMove(actualRow, actualCol) && "last-move",
                     isSquareInCheck(actualRow, actualCol) && "check",
-                    isValidMoveSquare && (isDroppingPiece ? "drop-target" : "valid-move"),
+                    isValidMoveSquare && !isDroppingPiece && "valid-move", // Add valid-move class for regular moves
+                    isDroppingPiece && isValidMoveSquare && getDropSquareHighlightClass(position),
                     selectedPosition?.row === actualRow && selectedPosition?.col === actualCol && "ring-2 ring-yellow-400"
                   )}
                   onClick={() => handleSquareClick(position)}
@@ -369,10 +466,10 @@ const ChessBoard: FC<ChessBoardProps> = ({
             className="glass-panel p-6 rounded-xl"
           >
             <h3 className="text-lg font-semibold mb-4 text-center">
-              Promote pawn to:
+              Chọn quân phong cấp:
             </h3>
             <div className="flex gap-4 justify-center">
-              {[PieceType.QUEEN, PieceType.ROOK, PieceType.KNIGHT].map((type) => (
+              {[PieceType.ROOK, PieceType.KNIGHT, PieceType.BISHOP].map((type) => (
                 <button
                   key={type}
                   className="w-16 h-16 bg-white/10 hover:bg-white/20 rounded-lg flex items-center justify-center transition-colors"

@@ -1,4 +1,4 @@
-import { ChessPiece, GameState, PieceColor, PieceType, Position, algebraicToPosition, positionToAlgebraic } from "./chess-models";
+import { ChessPiece, GameState, PieceColor, PieceType, Position, algebraicToPosition, positionToAlgebraic } from "../chess-models";
 
 // Interface mô tả bàn cờ 8x8 tiêu chuẩn cho Stockfish
 interface StandardBoard {
@@ -376,7 +376,7 @@ export class StockfishAdapter {
                 const dropInfo = StockfishAdapter.findPieceForDrop(bestMove, gameState);
                 if (dropInfo && dropInfo.piece && dropInfo.to) {
                     // Sử dụng các hàm từ chess-logic
-                    const { dropPiece } = await import('./chess-logic');
+                    const { dropPiece } = await import('../chess-logic');
                     return dropPiece(gameState, dropInfo.piece, dropInfo.to);
                 }
             } else {
@@ -384,7 +384,7 @@ export class StockfishAdapter {
                 const moveInfo = StockfishAdapter.processStockfishMove(bestMove, gameState);
                 if (moveInfo && moveInfo.from && moveInfo.to) {
                     // Sử dụng các hàm từ chess-logic
-                    const { makeMove } = await import('./chess-logic');
+                    const { makeMove } = await import('../chess-logic');
                     return makeMove(gameState, moveInfo.from, moveInfo.to);
                 }
             }

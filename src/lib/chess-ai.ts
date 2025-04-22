@@ -76,49 +76,6 @@ const PIECE_SQUARE_TABLES: Record<PieceType, number[][]> = {
     ]
 };
 
-// Trọng số chiến lược được tối ưu hóa cho bàn 6x6
-const STRATEGIC_WEIGHTS = {
-    opening: {
-        PIECE_VALUE: 1.0,
-        PIECE_POSITION: 0.7,       // Tăng tầm quan trọng của vị trí trên bàn nhỏ
-        MOBILITY: 0.9,             // Tăng vì tính cơ động quan trọng hơn trên bàn 6x6
-        CENTER_CONTROL: 1.3,       // Tăng tầm quan trọng kiểm soát trung tâm
-        KING_SAFETY: 1.6,          // Tăng vì vua dễ bị tấn công hơn
-        PIECE_DEVELOPMENT: 1.0,
-        KING_ATTACK: 0.6,          // Tăng nhẹ
-        PAWN_STRUCTURE: 0.6,       // Tăng nhẹ
-        THREAT: 0.8,               // Tăng nhẹ
-        ATTACK_PATTERNS: 0.7,
-        PIECE_DROPS: 0.9           // Thêm trọng số cho việc thả quân
-    },
-    middlegame: {
-        PIECE_VALUE: 1.0,
-        PIECE_POSITION: 0.8,       // Tăng tầm quan trọng của vị trí
-        MOBILITY: 1.2,             // Tăng vì tính cơ động quan trọng hơn
-        CENTER_CONTROL: 1.1,
-        KING_SAFETY: 2.1,          // Tăng vì vua dễ bị tấn công hơn
-        PIECE_DEVELOPMENT: 0.6,
-        KING_ATTACK: 1.6,          // Tăng vì tấn công vua quan trọng hơn
-        PAWN_STRUCTURE: 0.8,
-        THREAT: 1.1,
-        ATTACK_PATTERNS: 0.9,
-        PIECE_DROPS: 1.2           // Thêm trọng số cho việc thả quân
-    },
-    endgame: {
-        PIECE_VALUE: 1.0,
-        PIECE_POSITION: 0.6,
-        MOBILITY: 1.3,             // Tăng vì tính cơ động rất quan trọng trong tàn cuộc
-        CENTER_CONTROL: 0.7,
-        KING_SAFETY: 0.8,          // Giảm vì vua cần năng động hơn trong tàn cuộc
-        PIECE_DEVELOPMENT: 0.3,
-        KING_ATTACK: 2.0,
-        PAWN_STRUCTURE: 1.1,       // Tăng tầm quan trọng của tốt trong tàn cuộc
-        THREAT: 1.7,               // Tăng tầm quan trọng của đe dọa
-        ATTACK_PATTERNS: 1.3,
-        PIECE_DROPS: 1.5           // Thêm trọng số cho việc thả quân
-    }
-};
-
 // Bảng đánh giá cho việc thả quân ở các vị trí
 const DROP_POSITION_VALUES: Record<PieceType, number[][]> = {
     [PieceType.QUEEN]: [
@@ -169,6 +126,101 @@ const DROP_POSITION_VALUES: Record<PieceType, number[][]> = {
         [0, 0, 0, 0, 0, 0],
         [0, 0, 0, 0, 0, 0]
     ]
+};
+
+// Bảng đánh giá cho việc thả quân ở các vị trí đặc biệt cho bàn 6x6
+const SPECIAL_DROP_POSITIONS: Record<PieceType, number[][]> = {
+    [PieceType.KNIGHT]: [
+        [0, 10, 15, 15, 10, 0], // Vị trí góc không tốt cho Mã
+        [10, 30, 40, 40, 30, 10], // Mã kiểm soát tốt vị trí gần trung tâm
+        [15, 40, 60, 60, 40, 15],
+        [15, 40, 60, 60, 40, 15],
+        [10, 30, 40, 40, 30, 10],
+        [0, 10, 15, 15, 10, 0]
+    ],
+    [PieceType.BISHOP]: [
+        [20, 10, 10, 10, 10, 20], // Tượng hoạt động hiệu quả ở bàn cờ nhỏ
+        [10, 30, 20, 20, 30, 10],
+        [10, 20, 40, 40, 20, 10],
+        [10, 20, 40, 40, 20, 10],
+        [10, 30, 20, 20, 30, 10],
+        [20, 10, 10, 10, 10, 20]
+    ],
+    [PieceType.ROOK]: [
+        [10, 10, 10, 10, 10, 10],
+        [25, 15, 15, 15, 15, 25], // Xe hoạt động tốt hơn trên bàn cờ nhỏ
+        [10, 15, 20, 20, 15, 10],
+        [10, 15, 20, 20, 15, 10],
+        [25, 15, 15, 15, 15, 25],
+        [10, 10, 10, 10, 10, 10]
+    ],
+    [PieceType.QUEEN]: [
+        [15, 15, 20, 20, 15, 15],
+        [15, 30, 40, 40, 30, 15],
+        [20, 40, 50, 50, 40, 20], // Hậu rất mạnh trên bàn cờ nhỏ
+        [20, 40, 50, 50, 40, 20],
+        [15, 30, 40, 40, 30, 15],
+        [15, 15, 20, 20, 15, 15]
+    ],
+    [PieceType.PAWN]: [
+        [0, 0, 0, 0, 0, 0],      // Không thể thả tốt ở hàng cuối
+        [60, 70, 80, 80, 70, 60], // Giá trị cao khi thả tốt gần phong cấp
+        [40, 50, 60, 60, 50, 40],
+        [30, 40, 50, 50, 40, 30],
+        [15, 20, 30, 30, 20, 15],
+        [0, 0, 0, 0, 0, 0]       // Không thể thả tốt ở hàng cuối
+    ],
+    [PieceType.KING]: [
+        [0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0]
+    ]
+};
+
+// Trọng số chiến lược được tối ưu hóa cho bàn 6x6
+const STRATEGIC_WEIGHTS = {
+    opening: {
+        PIECE_VALUE: 1.0,
+        PIECE_POSITION: 0.7,       // Tăng tầm quan trọng của vị trí trên bàn nhỏ
+        MOBILITY: 0.9,             // Tăng vì tính cơ động quan trọng hơn trên bàn 6x6
+        CENTER_CONTROL: 1.3,       // Tăng tầm quan trọng kiểm soát trung tâm
+        KING_SAFETY: 1.6,          // Tăng vì vua dễ bị tấn công hơn
+        PIECE_DEVELOPMENT: 1.0,
+        KING_ATTACK: 0.6,          // Tăng nhẹ
+        PAWN_STRUCTURE: 0.6,       // Tăng nhẹ
+        THREAT: 0.8,               // Tăng nhẹ
+        ATTACK_PATTERNS: 0.7,
+        PIECE_DROPS: 0.9           // Thêm trọng số cho việc thả quân
+    },
+    middlegame: {
+        PIECE_VALUE: 1.0,
+        PIECE_POSITION: 0.8,       // Tăng tầm quan trọng của vị trí
+        MOBILITY: 1.2,             // Tăng vì tính cơ động quan trọng hơn
+        CENTER_CONTROL: 1.1,
+        KING_SAFETY: 2.1,          // Tăng vì vua dễ bị tấn công hơn
+        PIECE_DEVELOPMENT: 0.6,
+        KING_ATTACK: 1.6,          // Tăng vì tấn công vua quan trọng hơn
+        PAWN_STRUCTURE: 0.8,
+        THREAT: 1.1,
+        ATTACK_PATTERNS: 0.9,
+        PIECE_DROPS: 1.2           // Thêm trọng số cho việc thả quân
+    },
+    endgame: {
+        PIECE_VALUE: 1.0,
+        PIECE_POSITION: 0.6,
+        MOBILITY: 1.3,             // Tăng vì tính cơ động rất quan trọng trong tàn cuộc
+        CENTER_CONTROL: 0.7,
+        KING_SAFETY: 0.8,          // Giảm vì vua cần năng động hơn trong tàn cuộc
+        PIECE_DEVELOPMENT: 0.3,
+        KING_ATTACK: 2.0,
+        PAWN_STRUCTURE: 1.1,       // Tăng tầm quan trọng của tốt trong tàn cuộc
+        THREAT: 1.7,               // Tăng tầm quan trọng của đe dọa
+        ATTACK_PATTERNS: 1.3,
+        PIECE_DROPS: 1.5           // Thêm trọng số cho việc thả quân
+    }
 };
 
 // Hằng số
@@ -658,9 +710,16 @@ export class ChessAI {
                         if (!stillUnderThreat) {
                             // Quân không còn bị đe dọa sau khi thả quân
                             score += DROP_TACTICS.PROTECT_PIECE;
-                            // Thêm điểm nếu quân được bảo vệ có giá trị cao
-                            if (PIECE_VALUES[boardPiece.type] >= PIECE_VALUES[PieceType.ROOK]) {
-                                score += 40;
+
+                            // Ưu tiên cao hơn cho bảo vệ xe và quân giá trị cao
+                            if (boardPiece.type === PieceType.ROOK) {
+                                // Thưởng đặc biệt cho việc bảo vệ xe
+                                score += DROP_TACTICS.PROTECT_PIECE * 1.5;
+                                console.log("Ưu tiên bảo vệ XE");
+                            }
+                            else if (PIECE_VALUES[boardPiece.type] >= PIECE_VALUES[PieceType.BISHOP]) {
+                                // Thưởng cao cho việc bảo vệ quân giá trị cao khác
+                                score += DROP_TACTICS.PROTECT_PIECE * 1.2;
                             }
                         }
                     }
@@ -732,6 +791,425 @@ export class ChessAI {
         }
 
         return score;
+    }
+
+    // Thêm chiến thuật thả quân thông minh đặc biệt cho bàn 6x6
+    private getTacticalDropMove(gameState: GameState): AIMove | null {
+        const currentPlayer = gameState.currentPlayer;
+        const pieceBank = gameState.pieceBank[currentPlayer];
+
+        if (pieceBank.length === 0) return null;
+
+        // Chiến thuật 1: Thả quân tạo pin (ghim) một quân của đối thủ
+        const pinMove = this.findPinningDropMove(gameState);
+        if (pinMove) return pinMove;
+
+        // Chiến thuật 2: Thả quân tạo vị trí outpost trên bàn 6x6
+        const outpostMove = this.findOutpostDropMove(gameState);
+        if (outpostMove) return outpostMove;
+
+        // Chiến thuật 3: Tạo battery (pin cùng chiều) với quân cùng loại
+        const batteryMove = this.findBatteryDropMove(gameState);
+        if (batteryMove) return batteryMove;
+
+        // Chiến thuật 4: Thả quân để khóa quân đối phương
+        const blockingMove = this.findBlockingDropMove(gameState);
+        if (blockingMove) return blockingMove;
+
+        // Tìm chiến thuật thả quân đặc biệt cho tàn cuộc
+        if (this.getGamePhase(gameState) === 'endgame') {
+            const endgameMove = this.getEndgameDropStrategy(gameState);
+            if (endgameMove) return endgameMove;
+        }
+
+        return null;
+    }
+
+    // Tìm nước thả ghim (pin) quân đối thủ
+    private findPinningDropMove(gameState: GameState): AIMove | null {
+        const currentPlayer = gameState.currentPlayer;
+        const opponentColor = currentPlayer === PieceColor.WHITE ? PieceColor.BLACK : PieceColor.WHITE;
+        const pieceBank = gameState.pieceBank[currentPlayer];
+
+        // Tìm vị trí vua đối thủ
+        const opponentKingPos = opponentColor === PieceColor.WHITE ? this.whiteKingPos : this.blackKingPos;
+        if (!opponentKingPos) return null;
+
+        // Chỉ tượng, xe và hậu có thể tạo pin
+        const longRangePieces = pieceBank.filter(p =>
+            p.type === PieceType.QUEEN || p.type === PieceType.ROOK || p.type === PieceType.BISHOP
+        );
+
+        if (longRangePieces.length === 0) return null;
+
+        for (const piece of longRangePieces) {
+            const validDropSquares = getValidDropSquares(gameState, piece);
+
+            for (const dropPos of validDropSquares) {
+                // Kiểm tra xem dropPos có tạo pin không
+                const direction = this.getDirection(dropPos, opponentKingPos);
+                if (!direction) continue; // Không cùng hướng
+
+                // Kiểm tra xem có đúng một quân của đối thủ nằm giữa không
+                const piecesInBetween = this.getPiecesInDirection(gameState, dropPos, direction);
+
+                if (piecesInBetween.length === 1 &&
+                    piecesInBetween[0].piece &&
+                    piecesInBetween[0].piece.color === opponentColor &&
+                    piecesInBetween[0].piece.type !== PieceType.KING) {
+                    // Tìm thấy nước thả ghim
+                    return {
+                        piece,
+                        to: dropPos,
+                        score: 600, // Điểm cao vì đây là nước thả chiến thuật tốt
+                        isDropMove: true
+                    };
+                }
+            }
+        }
+
+        return null;
+    }
+
+    // Kiểm tra xem hai vị trí có cùng hướng (ngang, dọc, chéo) không
+    private getDirection(pos1: Position, pos2: Position): { rowDir: number, colDir: number } | null {
+        const rowDiff = pos2.row - pos1.row;
+        const colDiff = pos2.col - pos1.col;
+
+        // Kiểm tra xem có nằm trên cùng một đường thẳng không
+        if (rowDiff === 0) return { rowDir: 0, colDir: Math.sign(colDiff) }; // Ngang
+        if (colDiff === 0) return { rowDir: Math.sign(rowDiff), colDir: 0 }; // Dọc
+        if (Math.abs(rowDiff) === Math.abs(colDiff)) {
+            return {
+                rowDir: Math.sign(rowDiff),
+                colDir: Math.sign(colDiff)
+            }; // Chéo
+        }
+
+        return null; // Không cùng hướng
+    }
+
+    // Lấy danh sách quân cờ nằm trên cùng một đường từ vị trí pos theo hướng dir
+    private getPiecesInDirection(gameState: GameState, pos: Position, dir: { rowDir: number, colDir: number }): { piece: ChessPiece | null, position: Position }[] {
+        const pieces: { piece: ChessPiece | null, position: Position }[] = [];
+        let row = pos.row + dir.rowDir;
+        let col = pos.col + dir.colDir;
+
+        // Duyệt theo hướng đã cho cho đến khi gặp biên bàn cờ
+        while (row >= 0 && row < 6 && col >= 0 && col < 6) {
+            pieces.push({
+                piece: gameState.board[row][col],
+                position: { row, col }
+            });
+
+            // Nếu gặp quân cờ, chỉ tìm thêm một quân nữa
+            if (gameState.board[row][col]) {
+                row += dir.rowDir;
+                col += dir.colDir;
+
+                // Kiểm tra nếu vẫn còn trong bàn cờ
+                if (row >= 0 && row < 6 && col >= 0 && col < 6) {
+                    pieces.push({
+                        piece: gameState.board[row][col],
+                        position: { row, col }
+                    });
+                }
+                break;
+            }
+
+            row += dir.rowDir;
+            col += dir.colDir;
+        }
+
+        return pieces;
+    }
+
+    // Tìm nước thả quân tạo outpost (vị trí tiền đồn) - đặc biệt hiệu quả trên bàn 6x6
+    private findOutpostDropMove(gameState: GameState): AIMove | null {
+        const currentPlayer = gameState.currentPlayer;
+        const pieceBank = gameState.pieceBank[currentPlayer];
+
+        // Ưu tiên thả mã tạo outpost
+        const knights = pieceBank.filter(p => p.type === PieceType.KNIGHT);
+        if (knights.length === 0) return null;
+
+        const knight = knights[0];
+        const centerRows = currentPlayer === PieceColor.WHITE ? [3, 4] : [2, 1];
+        const validDropSquares = getValidDropSquares(gameState, knight);
+
+        // Tìm các ô trống ở trung tâm bàn cờ để thả mã
+        const centerSquares = validDropSquares.filter(pos =>
+            centerRows.includes(pos.row) && pos.col >= 1 && pos.col <= 4
+        );
+
+        if (centerSquares.length === 0) return null;
+
+        // Tìm ô tốt nhất để thả mã tạo outpost
+        for (const square of centerSquares) {
+            // Kiểm tra xem ô này có được bảo vệ không
+            let isProtected = false;
+
+            // Kiểm tra bảo vệ từ các quân khác
+            for (let row = 0; row < 6; row++) {
+                for (let col = 0; col < 6; col++) {
+                    const piece = gameState.board[row][col];
+                    if (piece && piece.color === currentPlayer && !(row === square.row && col === square.col)) {
+                        const validMoves = getValidMoves(gameState, { row, col });
+                        if (validMoves.some(m => m.row === square.row && m.col === square.col)) {
+                            isProtected = true;
+                            break;
+                        }
+                    }
+                }
+                if (isProtected) break;
+            }
+
+            if (isProtected) {
+                // Đây là một outpost tốt
+                return {
+                    piece: knight,
+                    to: square,
+                    score: 500,
+                    isDropMove: true
+                };
+            }
+        }
+
+        // Nếu không tìm thấy outpost được bảo vệ, chọn vị trí trung tâm tốt nhất
+        if (centerSquares.length > 0) {
+            // Ưu tiên các ô ở hàng giữa (2-3)
+            const bestSquares = centerSquares.filter(s => s.row === 2 || s.row === 3);
+            if (bestSquares.length > 0) {
+                return {
+                    piece: knight,
+                    to: bestSquares[0],
+                    score: 400,
+                    isDropMove: true
+                };
+            }
+
+            return {
+                piece: knight,
+                to: centerSquares[0],
+                score: 350,
+                isDropMove: true
+            };
+        }
+
+        return null;
+    }
+
+    // Tìm nước thả quân tạo battery (pin cùng chiều) - hiệu quả cao trên bàn 6x6
+    private findBatteryDropMove(gameState: GameState): AIMove | null {
+        const currentPlayer = gameState.currentPlayer;
+        const opponentColor = currentPlayer === PieceColor.WHITE ? PieceColor.BLACK : PieceColor.WHITE;
+        const pieceBank = gameState.pieceBank[currentPlayer];
+
+        // Quân dài tầm có thể tạo battery
+        const longRangePieces = pieceBank.filter(p =>
+            p.type === PieceType.QUEEN || p.type === PieceType.ROOK || p.type === PieceType.BISHOP
+        );
+
+        if (longRangePieces.length === 0) return null;
+
+        // Tìm các quân cờ cùng loại trên bàn
+        for (const piece of longRangePieces) {
+            const validDropSquares = getValidDropSquares(gameState, piece);
+
+            // Tìm các quân cùng loại trên bàn
+            for (let row = 0; row < 6; row++) {
+                for (let col = 0; col < 6; col++) {
+                    const boardPiece = gameState.board[row][col];
+
+                    // Kiểm tra nếu là quân cùng loại và cùng màu
+                    if (boardPiece && boardPiece.color === currentPlayer &&
+                        (boardPiece.type === piece.type ||
+                            (boardPiece.type === PieceType.QUEEN &&
+                                (piece.type === PieceType.ROOK || piece.type === PieceType.BISHOP))
+                        )) {
+
+                        // Tìm các ô có thể thả để tạo battery
+                        for (const dropPos of validDropSquares) {
+                            // Tạo battery theo hàng ngang
+                            if (dropPos.row === row) {
+                                // Kiểm tra xem có quân của đối thủ trên cùng hàng không
+                                let hasTarget = false;
+                                const minCol = Math.min(col, dropPos.col);
+                                const maxCol = Math.max(col, dropPos.col);
+
+                                for (let c = 0; c < 6; c++) {
+                                    // Kiểm tra các cột ngoài đoạn giữa hai quân
+                                    if (c < minCol || c > maxCol) {
+                                        const targetPiece = gameState.board[row][c];
+                                        if (targetPiece && targetPiece.color === opponentColor) {
+                                            hasTarget = true;
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                if (hasTarget) {
+                                    return {
+                                        piece,
+                                        to: dropPos,
+                                        score: 400,
+                                        isDropMove: true
+                                    };
+                                }
+                            }
+
+                            // Tạo battery theo hàng dọc
+                            if (dropPos.col === col) {
+                                // Kiểm tra xem có quân của đối thủ trên cùng cột không
+                                let hasTarget = false;
+                                const minRow = Math.min(row, dropPos.row);
+                                const maxRow = Math.max(row, dropPos.row);
+
+                                for (let r = 0; r < 6; r++) {
+                                    // Kiểm tra các hàng ngoài đoạn giữa hai quân
+                                    if (r < minRow || r > maxRow) {
+                                        const targetPiece = gameState.board[r][col];
+                                        if (targetPiece && targetPiece.color === opponentColor) {
+                                            hasTarget = true;
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                if (hasTarget) {
+                                    return {
+                                        piece,
+                                        to: dropPos,
+                                        score: 400,
+                                        isDropMove: true
+                                    };
+                                }
+                            }
+
+                            // Tạo battery theo đường chéo (chỉ cho tượng và hậu)
+                            if ((piece.type === PieceType.BISHOP || piece.type === PieceType.QUEEN) &&
+                                (boardPiece.type === PieceType.BISHOP || boardPiece.type === PieceType.QUEEN)) {
+                                const rowDiff = Math.abs(dropPos.row - row);
+                                const colDiff = Math.abs(dropPos.col - col);
+
+                                if (rowDiff === colDiff) {
+                                    // Cùng đường chéo
+                                    const rowDir = Math.sign(dropPos.row - row);
+                                    const colDir = Math.sign(dropPos.col - col);
+
+                                    // Kiểm tra các ô ngoài đoạn giữa hai quân
+                                    let hasTarget = false;
+
+                                    // Kiểm tra theo một hướng
+                                    let r = row - rowDir;
+                                    let c = col - colDir;
+                                    while (r >= 0 && r < 6 && c >= 0 && c < 6) {
+                                        const targetPiece = gameState.board[r][c];
+                                        if (targetPiece && targetPiece.color === opponentColor) {
+                                            hasTarget = true;
+                                            break;
+                                        }
+                                        r -= rowDir;
+                                        c -= colDir;
+                                    }
+
+                                    // Kiểm tra theo hướng còn lại
+                                    r = dropPos.row + rowDir;
+                                    c = dropPos.col + colDir;
+                                    while (r >= 0 && r < 6 && c >= 0 && c < 6 && !hasTarget) {
+                                        const targetPiece = gameState.board[r][c];
+                                        if (targetPiece && targetPiece.color === opponentColor) {
+                                            hasTarget = true;
+                                            break;
+                                        }
+                                        r += rowDir;
+                                        c += colDir;
+                                    }
+
+                                    if (hasTarget) {
+                                        return {
+                                            piece,
+                                            to: dropPos,
+                                            score: 400,
+                                            isDropMove: true
+                                        };
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    // Tìm nước thả quân để khóa quân đối phương
+    private findBlockingDropMove(gameState: GameState): AIMove | null {
+        const currentPlayer = gameState.currentPlayer;
+        const opponentColor = currentPlayer === PieceColor.WHITE ? PieceColor.BLACK : PieceColor.WHITE;
+        const pieceBank = gameState.pieceBank[currentPlayer];
+
+        if (pieceBank.length === 0) return null;
+
+        // Ưu tiên thả mã vì mã có thể nhảy qua các quân khác
+        const knights = pieceBank.filter(p => p.type === PieceType.KNIGHT);
+
+        // Nếu không có mã, thử với các quân khác
+        const pieces = knights.length > 0 ? knights : pieceBank;
+
+        for (const piece of pieces) {
+            const validDropSquares = getValidDropSquares(gameState, piece);
+
+            // Đánh giá từng vị trí thả quân
+            for (const dropPos of validDropSquares) {
+                let blockingScore = 0;
+
+                // Thử thả quân và kiểm tra ảnh hưởng đến quân đối phương
+                const tempBoard = gameState.board.map(row => [...row]);
+                tempBoard[dropPos.row][dropPos.col] = piece;
+
+                // Đếm số quân bị hạn chế di chuyển sau khi thả
+                for (let row = 0; row < 6; row++) {
+                    for (let col = 0; col < 6; col++) {
+                        const boardPiece = gameState.board[row][col];
+                        if (boardPiece && boardPiece.color === opponentColor) {
+                            // Đếm số nước đi trước khi thả
+                            const movesBefore = getValidMoves(gameState, { row, col }).length;
+
+                            // Đếm số nước đi sau khi thả
+                            const tempGameState = {
+                                ...gameState,
+                                board: tempBoard,
+                                currentPlayer: opponentColor
+                            };
+                            const movesAfter = getValidMoves(tempGameState, { row, col }).length;
+
+                            // Tính điểm dựa trên số nước đi bị hạn chế
+                            const diff = movesBefore - movesAfter;
+                            if (diff > 0) {
+                                // Thưởng nhiều hơn nếu khóa các quân giá trị cao
+                                const pieceValue = PIECE_VALUES[boardPiece.type] / 100;
+                                blockingScore += diff * pieceValue;
+                            }
+                        }
+                    }
+                }
+
+                // Nếu tìm thấy vị trí thả quân làm hạn chế đáng kể đối thủ
+                if (blockingScore >= 3) {
+                    return {
+                        piece,
+                        to: dropPos,
+                        score: 300 + blockingScore * 10,
+                        isDropMove: true
+                    };
+                }
+            }
+        }
+
+        return null;
     }
 
     // Thêm chiến lược thả quân đặc biệt cho tàn cuộc
@@ -943,13 +1421,13 @@ export class ChessAI {
                 this.searchDepth = 1;
                 break;
             case 'medium':
-                this.searchDepth = 1;
+                this.searchDepth = 3; // Khớp với độ sâu 3 của Stockfish
                 break;
             case 'hard':
-                this.searchDepth = 2;
+                this.searchDepth = 4;
                 break;
             case 'grandmaster':
-                this.searchDepth = 2;
+                this.searchDepth = 5;
                 break;
         }
         console.log(`Đã thiết lập độ khó cho ChessAI: ${difficulty}, độ sâu: ${this.searchDepth}`);

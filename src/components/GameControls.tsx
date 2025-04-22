@@ -62,7 +62,7 @@ const GameControls: FC<GameControlsProps> = ({
         <Button
           variant="outline"
           size="sm"
-          className="flex-1"
+          className="flex-1 bg-white text-black border-black"
           onClick={onNewGame}
         >
           <RefreshCw className="w-4 h-4 mr-2" />
@@ -72,7 +72,7 @@ const GameControls: FC<GameControlsProps> = ({
         <Button
           variant="outline"
           size="sm"
-          className="flex-1"
+          className="flex-1 bg-white text-black border-black"
           onClick={onFlipBoard}
         >
           <ArrowDownUp className="w-4 h-4 mr-2" />
@@ -83,7 +83,7 @@ const GameControls: FC<GameControlsProps> = ({
           <Button
             variant="outline"
             size="sm"
-            className="flex-1"
+            className="flex-1 bg-white text-black border-black disabled:bg-gray-200 disabled:text-gray-500"
             onClick={onUndoMove}
             disabled={gameState.moveHistory.length === 0 || isThinking}
           >
@@ -92,12 +92,11 @@ const GameControls: FC<GameControlsProps> = ({
           </Button>
         )}
       </div>
-
       <div className="flex items-center justify-between p-3 mt-2 bg-gradient-to-r from-blue-700/50 to-blue-900/50 rounded-lg border border-blue-700/50">
         <div className="flex items-center">
           <Cpu className="w-5 h-5 mr-2 text-blue-400" />
           <Label htmlFor="ai-mode" className="font-bold text-blue-300">
-            CHơi với AI Lỏ
+            Chơi với AI
           </Label>
         </div>
 

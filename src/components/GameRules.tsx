@@ -1,5 +1,4 @@
-
-import { FC } from 'react';
+import { FC, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -9,6 +8,26 @@ interface GameRulesProps {
 }
 
 const GameRules: FC<GameRulesProps> = ({ onClose }) => {
+  // Tạo đường dẫn động cho hình ảnh, tương thích với GitHub Pages
+  const getImagePath = useMemo(() => {
+    const basePath = (() => {
+      // Kiểm tra URL hiện tại để xác định nếu chúng ta đang ở GitHub Pages
+      const currentUrl = window.location.href;
+
+      // Nếu URL chứa github.io, lấy đúng đường dẫn repository
+      if (currentUrl.includes('github.io')) {
+        const pathSegments = window.location.pathname.split('/');
+        const repoName = pathSegments[1]; // Segment đầu tiên sau hostname
+        return repoName ? `/${repoName}` : '';
+      }
+
+      // Nếu không phải GitHub Pages, không cần tiền tố
+      return '';
+    })();
+
+    return `${basePath}/lovable-uploads/e2daecd7-a823-4892-a55d-067798709380.png`;
+  }, []);
+
   return (
     <motion.div
       className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4"
@@ -16,7 +35,7 @@ const GameRules: FC<GameRulesProps> = ({ onClose }) => {
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
     >
-      <motion.div 
+      <motion.div
         className="bg-white text-black rounded-lg max-w-3xl w-full overflow-hidden shadow-xl"
         initial={{ scale: 0.9, y: 20 }}
         animate={{ scale: 1, y: 0 }}
@@ -24,16 +43,16 @@ const GameRules: FC<GameRulesProps> = ({ onClose }) => {
       >
         <div className="flex justify-between items-center p-4 border-b border-gray-200">
           <h2 className="text-2xl font-bold text-center flex-grow">CÁCH CHƠI</h2>
-          <Button 
-            variant="ghost" 
-            size="icon" 
+          <Button
+            variant="ghost"
+            size="icon"
             onClick={onClose}
             className="rounded-full hover:bg-gray-100"
           >
             <X />
           </Button>
         </div>
-        
+
         <div className="p-6 max-h-[70vh] overflow-y-auto">
           <div className="flex flex-col md:flex-row gap-6">
             <div className="md:w-1/2 space-y-4">
@@ -55,20 +74,26 @@ const GameRules: FC<GameRulesProps> = ({ onClose }) => {
               </ul>
               <p>Kết thúc ván đấu: Chiếu bí đối phương hoặc hòa khi không còn nước đi hợp lệ.</p>
             </div>
-            
+
             <div className="md:w-1/2 flex justify-center">
-              <img 
-                src="/lovable-uploads/e2daecd7-a823-4892-a55d-067798709380.png"
-                alt="Minh họa bàn cờ 6x6" 
+              <img
+                src={getImagePath}
+                alt="Minh họa bàn cờ 6x6"
                 className="max-w-full rounded-lg border border-gray-200 shadow-md"
+                onError={(e) => {
+                  console.error("Failed to load image:", e);
+                  const target = e.target as HTMLImageElement;
+                  // Sử dụng một hình ảnh dự phòng nếu không tải được
+                  target.src = "/placeholder.svg";
+                }}
               />
             </div>
           </div>
         </div>
-        
+
         <div className="p-4 border-t border-gray-200 text-center">
-          <Button 
-            onClick={onClose} 
+          <Button
+            onClick={onClose}
             variant="default"
             className="bg-[#769656] hover:bg-[#6a874c] text-white font-semibold"
           >
