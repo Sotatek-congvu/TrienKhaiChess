@@ -84,7 +84,6 @@ npm run build
 - **Framer Motion**: Thư viện animation cho React
 - **Sonner**: Thư viện thông báo (notifications)
 - **shadcn/ui**: Bộ components UI có thể tái sử dụng
-- **Stockfish.js**: Engine cờ vua cho AI
 
 ## Cấu trúc dự án
 
