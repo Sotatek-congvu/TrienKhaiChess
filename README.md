@@ -114,10 +114,10 @@ src/
 
 
 ### Vũ Văn Hà Công
-- **Vai trò**: Frontend Developer, UI/UX Designer,Thuật toán đánh giá thả quân.
+- **Vai trò**: Frontend Developer, UI/UX Designer,Xây dựng bảng đánh giá.
 
 ### Lê Trung Kiên
-- **Vai trò**: Full-stack Developer, Integration Specialist,Game Logic
+- **Vai trò**: Full-stack Developer, Integration Specialist,Game Logic,Thuật toán đánh giá thả quân.
 
 ## Tính năng trong tương lai
 
