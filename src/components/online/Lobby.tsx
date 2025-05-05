@@ -68,6 +68,7 @@ const Lobby = () => {
     const [isLoggingOut, setIsLoggingOut] = useState(false);
     const [activeGames, setActiveGames] = useState<ActiveGame[]>([]);
     const [isLoading, setIsLoading] = useState<boolean>(true);
+    const [isCreatingGame, setIsCreatingGame] = useState<boolean>(false);
 
     // Sử dụng hook theo dõi người chơi online
     const { players, count } = useOnlinePlayers();
@@ -144,13 +145,16 @@ const Lobby = () => {
 
     // Xử lý tạo trò chơi mới
     const handleCreateGame = async (opponentId?: string) => {
+        if (isCreatingGame) return; // Prevent multiple clicks
+
         try {
+            setIsCreatingGame(true);
             // Tạo thông báo đang thực hiện
-            toast.loading("Đang tạo trận đấu mới...");
+            const toastId = toast.loading("Đang tạo trận đấu mới...");
 
             const gameId = await createGame();
             if (gameId) {
-                toast.dismiss();
+                toast.dismiss(toastId);
                 toast.success("Đã tạo trận đấu thành công");
 
                 // Nếu có người chơi được mời, gửi thông báo
@@ -171,8 +175,9 @@ const Lobby = () => {
             }
         } catch (error) {
             console.error("Error creating game:", error);
-            toast.dismiss();
             toast.error("Không thể tạo trận đấu");
+        } finally {
+            setIsCreatingGame(false);
         }
     };
 
@@ -224,7 +229,7 @@ const Lobby = () => {
                             </div>
                         )}
 
-                        <OnlinePlayersIndicator className="mr-2" showList={true} />
+                        <OnlinePlayersIndicator className="mr-2" showList={true} onChallengePlayer={invitePlayer} />
 
                         <div className="flex items-center gap-1">
                             <Button
@@ -242,9 +247,19 @@ const Lobby = () => {
                                 size="sm"
                                 className="flex items-center gap-1"
                                 onClick={() => handleCreateGame()}
+                                disabled={isCreatingGame}
                             >
-                                <UserPlus size={16} />
-                                <span className="hidden sm:inline">Tạo trận mới</span>
+                                {isCreatingGame ? (
+                                    <>
+                                        <div className="h-4 w-4 border-t-2 border-r-2 border-current rounded-full animate-spin mr-1"></div>
+                                        <span className="hidden sm:inline">Đang tạo...</span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <UserPlus size={16} />
+                                        <span className="hidden sm:inline">Tạo trận mới</span>
+                                    </>
+                                )}
                             </Button>
 
                             <Button
@@ -326,12 +341,12 @@ const Lobby = () => {
                                                     <TableCell>
                                                         <div className="flex items-center gap-2">
                                                             <Avatar className="h-8 w-8">
-                                                                <AvatarImage src={game.white_player.avatar_url || ''} alt={game.white_player.username} />
-                                                                <AvatarFallback>{game.white_player.username.substring(0, 2).toUpperCase()}</AvatarFallback>
+                                                                <AvatarImage src={game.white_player?.avatar_url || ''} alt={game.white_player?.username} />
+                                                                <AvatarFallback>{game.white_player?.username.substring(0, 2).toUpperCase()}</AvatarFallback>
                                                             </Avatar>
                                                             <div>
-                                                                <div className="font-medium">{game.white_player.display_name || game.white_player.username}</div>
-                                                                <div className="text-xs text-gray-400">{game.white_player.rating} Elo</div>
+                                                                <div className="font-medium">{game.white_player?.display_name || game.white_player?.username}</div>
+                                                                <div className="text-xs text-gray-400">{game.white_player?.rating} Elo</div>
                                                             </div>
                                                         </div>
                                                     </TableCell>
@@ -368,7 +383,7 @@ const Lobby = () => {
                                                             size="sm"
                                                             onClick={() => joinGame(game.id)}
                                                         >
-                                                            {!game.black_player && game.white_player.id !== user?.id ? 'Tham gia' : 'Xem'}
+                                                            {!game.black_player && game.white_player?.id !== user?.id ? 'Tham gia' : 'Xem'}
                                                         </Button>
                                                     </TableCell>
                                                 </TableRow>
@@ -386,8 +401,9 @@ const Lobby = () => {
                                             variant="default"
                                             className="mt-4"
                                             onClick={() => handleCreateGame()}
+                                            disabled={isCreatingGame}
                                         >
-                                            Tạo trận đấu mới
+                                            {isCreatingGame ? "Đang tạo..." : "Tạo trận đấu mới"}
                                         </Button>
                                     </div>
                                 )}

@@ -31,6 +31,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/context/AuthContext';
 import { cn } from '@/lib/utils';
+import { toast } from 'sonner';
 
 // Importing proper types for Supabase User
 import { User } from '@supabase/supabase-js';
@@ -83,9 +84,25 @@ export const OnlinePlayersIndicator: React.FC<OnlinePlayersIndicatorProps> = ({
 
     // Xử lý challenge người chơi
     const handleChallenge = (playerId: string) => {
-        if (onChallengePlayer) {
-            onChallengePlayer(playerId);
+        if (!user) {
+            toast.error('Vui lòng đăng nhập để thách đấu');
+            return;
         }
+
+        if (playerId === user.id) {
+            toast.error('Bạn không thể thách đấu chính mình');
+            return;
+        }
+
+        if (onChallengePlayer) {
+            toast.loading('Đang gửi lời thách đấu...');
+            onChallengePlayer(playerId);
+        } else {
+            toast.info('Vui lòng vào phòng chờ để thách đấu người chơi');
+        }
+
+        // Đóng Sheet sau khi thách đấu
+        setIsSheetOpen(false);
     };
 
     // Lấy chữ cái đầu của tên người dùng
