@@ -8,19 +8,46 @@ import GameRules from '@/components/GameRules';
 import { useStockfish } from '@/hooks/use-stockfish';
 import { useCallback } from 'react';
 import { Button } from '@/components/ui/button';
-import { HelpCircle, Cpu } from 'lucide-react';
+import { HelpCircle, Cpu, Users, LogOut } from 'lucide-react';
 import { toast } from "sonner";
 import {
   createInitialGameState
 } from '@/lib/chess-models';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '@/context/AuthContext';
+import OnlinePlayersIndicator from '@/components/OnlinePlayersIndicator';
 
 const Index = () => {
+  const navigate = useNavigate();
+  const { signOut, profile, user } = useAuth();
   const [gameState, setGameState] = useState<GameState>(createInitialGameState());
   const [boardPerspective, setBoardPerspective] = useState<PieceColor>(PieceColor.WHITE);
   const [gameStateHistory, setGameStateHistory] = useState<GameState[]>([createInitialGameState()]);
   const [showRules, setShowRules] = useState<boolean>(true);
   const [playAgainstAI, setPlayAgainstAI] = useState<boolean>(true); // Mặc định bật AI
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+
+  // Xử lý đăng xuất
+  const handleSignOut = async () => {
+    try {
+      setIsLoggingOut(true); // Hiển thị trạng thái đang xử lý
+      console.log("Đang đăng xuất...");
+
+      // Gọi hàm đăng xuất từ AuthContext
+      await signOut();
+
+      console.log("Đăng xuất thành công");
+      toast.success("Đăng xuất thành công");
+
+      // Reset các state và chuyển hướng sẽ được xử lý tự động bởi AuthContext
+    } catch (error) {
+      console.error("Lỗi khi đăng xuất:", error);
+      toast.error("Đã xảy ra lỗi khi đăng xuất");
+    } finally {
+      setIsLoggingOut(false);
+    }
+  };
 
   // Sử dụng hook Stockfish - đã được cập nhật để luôn sử dụng chế độ khó nhất
   const { isThinking, makeMove: makeMoveAI } = useStockfish({
@@ -146,37 +173,82 @@ const Index = () => {
     <div className="min-h-screen bg-[#312e2b] text-white p-4">
       <div className="max-w-5xl mx-auto">
         <motion.header
-          className="text-center mb-4 relative"
+          className="mb-6 relative flex flex-wrap items-center justify-between gap-4"
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5 }}
         >
-          <h1 className="text-2xl md:text-3xl font-bold text-white">
-            Chessmihouse 6×6
-          </h1>
-          <p className="text-gray-400 text-sm">
-            Cờ vua 6x6 với luật Crazyhouse - thả quân đã bắt
-          </p>
+          <div className="flex flex-col items-start">
+            <h1 className="text-2xl md:text-3xl font-bold text-white">
+              Chessmihouse 6×6
+            </h1>
+            <p className="text-gray-400 text-sm">
+              Cờ vua 6x6 với luật Crazyhouse - thả quân đã bắt
+            </p>
+          </div>
 
-          <div className="absolute right-0 top-0 flex items-center gap-2">
-            <Button
-              variant={playAgainstAI ? "default" : "outline"}
-              size="sm"
-              className="flex items-center gap-1"
-              onClick={() => toggleAI(!playAgainstAI)}
-            >
-              <Cpu size={16} />
-              {playAgainstAI ? "Tắt AI" : "Bật AI"}
-            </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Chỉ báo người chơi trực tuyến */}
+            <OnlinePlayersIndicator className="mr-1" showList={true} />
 
-            <Button
-              variant="ghost"
-              size="icon"
-              className="text-gray-300 hover:text-white hover:bg-gray-700"
-              onClick={() => setShowRules(true)}
-            >
-              <HelpCircle size={20} />
-            </Button>
+            {profile && (
+              <div className="text-sm mr-1 hidden md:flex items-center gap-1">
+                <span className="text-gray-400">Xin chào,</span>
+                <span className="font-medium text-white">{profile.display_name || profile.username}</span>
+              </div>
+            )}
+
+            <div className="flex items-center gap-1">
+              <Button
+                variant="secondary"
+                size="sm"
+                className="flex items-center gap-1"
+                onClick={() => navigate('/lobby')}
+              >
+                <Users size={16} />
+                <span className="hidden sm:inline">Chơi trực tuyến</span>
+              </Button>
+
+              <Button
+                variant={playAgainstAI ? "default" : "outline"}
+                size="sm"
+                className="flex items-center gap-1"
+                onClick={() => toggleAI(!playAgainstAI)}
+              >
+                <Cpu size={16} />
+                <span className="hidden sm:inline">{playAgainstAI ? "Tắt AI" : "Bật AI"}</span>
+              </Button>
+
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-gray-300 hover:text-white hover:bg-gray-700"
+                onClick={() => setShowRules(true)}
+              >
+                <HelpCircle size={16} />
+                <span className="hidden sm:inline">Luật chơi</span>
+              </Button>
+
+              <Button
+                variant="destructive"
+                size="sm"
+                className="flex items-center gap-1"
+                onClick={handleSignOut}
+                disabled={isLoggingOut}
+              >
+                {isLoggingOut ? (
+                  <>
+                    <div className="h-4 w-4 border-t-2 border-r-2 border-white rounded-full animate-spin mr-1" />
+                    <span className="hidden sm:inline">Đang đăng xuất...</span>
+                  </>
+                ) : (
+                  <>
+                    <LogOut size={16} />
+                    <span className="hidden sm:inline">Đăng xuất</span>
+                  </>
+                )}
+              </Button>
+            </div>
           </div>
         </motion.header>
 
@@ -194,6 +266,23 @@ const Index = () => {
               onNewGame={handleNewGame}
               disabled={isThinking} // Vô hiệu hóa bàn cờ khi AI đang suy nghĩ
             />
+
+            <motion.div
+              className="mt-4 flex justify-center"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.3, delay: 0.4 }}
+            >
+              <Button
+                variant="default"
+                size="lg"
+                className="bg-blue-600 hover:bg-blue-700 text-white font-medium px-6 py-2 rounded-md flex items-center gap-2"
+                onClick={() => navigate('/lobby')}
+              >
+                <Users size={18} />
+                <span>Vào phòng chờ trực tuyến</span>
+              </Button>
+            </motion.div>
           </motion.div>
 
           <motion.div
