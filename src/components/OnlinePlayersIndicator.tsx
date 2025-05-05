@@ -32,6 +32,9 @@ import { Button } from '@/components/ui/button';
 import { useAuth } from '@/context/AuthContext';
 import { cn } from '@/lib/utils';
 
+// Importing proper types for Supabase User
+import { User } from '@supabase/supabase-js';
+
 interface OnlinePlayersIndicatorProps {
     showList?: boolean;
     className?: string;
@@ -44,7 +47,7 @@ export const OnlinePlayersIndicator: React.FC<OnlinePlayersIndicatorProps> = ({
     onChallengePlayer,
 }) => {
     const { count, players, loading, updatePresence } = useOnlinePlayers();
-    const { user } = useAuth();
+    const { user, profile } = useAuth();
     const [isSheetOpen, setIsSheetOpen] = useState(false);
 
     // Cập nhật presence khi người dùng tương tác
@@ -87,7 +90,16 @@ export const OnlinePlayersIndicator: React.FC<OnlinePlayersIndicatorProps> = ({
 
     // Lấy chữ cái đầu của tên người dùng
     const getInitials = (name: string) => {
+        if (!name) return '?';
         return name.charAt(0).toUpperCase();
+    };
+
+    // Helper to get a display name from various sources
+    const getDisplayName = (user: User | null, profile: any | null): string => {
+        if (profile?.display_name) return profile.display_name;
+        if (profile?.username) return profile.username;
+        if (user?.email) return user.email.split('@')[0];
+        return 'User';
     };
 
     if (loading) {
@@ -100,7 +112,10 @@ export const OnlinePlayersIndicator: React.FC<OnlinePlayersIndicatorProps> = ({
     }
 
     // Loại bỏ người dùng hiện tại khỏi danh sách (nếu có)
-    const filteredPlayers = players.filter(player => player.id !== user?.id);
+    const filteredPlayers = user ? players.filter(player => player.id !== user.id) : players;
+
+    // Đảm bảo count hiển thị chính xác
+    const displayCount = Math.max(filteredPlayers.length + (user ? 1 : 0), count);
 
     return (
         <>
@@ -112,7 +127,7 @@ export const OnlinePlayersIndicator: React.FC<OnlinePlayersIndicatorProps> = ({
                                 <div className={cn("flex items-center text-green-400 cursor-pointer", className)}>
                                     <Badge variant="secondary" className="flex items-center gap-1 py-0.5 px-2">
                                         <Users size={16} className="text-green-500" />
-                                        <span className="font-medium">{count}</span>
+                                        <span className="font-medium">{displayCount}</span>
                                     </Badge>
                                 </div>
                             </TooltipTrigger>
@@ -120,7 +135,7 @@ export const OnlinePlayersIndicator: React.FC<OnlinePlayersIndicatorProps> = ({
 
                         <TooltipContent className="bg-gray-900 p-2 border-gray-800 max-w-[300px]">
                             <div>
-                                <div className="font-medium mb-1 text-green-400">{count} người chơi đang trực tuyến</div>
+                                <div className="font-medium mb-1 text-green-400">{displayCount} người chơi đang trực tuyến</div>
                                 {showList && players.length > 0 && (
                                     <div className="max-h-[150px] overflow-y-auto">
                                         <ul className="text-xs space-y-0.5">
@@ -130,6 +145,12 @@ export const OnlinePlayersIndicator: React.FC<OnlinePlayersIndicatorProps> = ({
                                                     <span>{player.display_name || player.username}</span>
                                                 </li>
                                             ))}
+                                            {user && !players.some(p => p.id === user.id) && (
+                                                <li className="flex items-center gap-1">
+                                                    <Users size={12} className="text-blue-500" />
+                                                    <span>{getDisplayName(user, profile)} (Bạn)</span>
+                                                </li>
+                                            )}
                                         </ul>
                                     </div>
                                 )}
@@ -141,13 +162,13 @@ export const OnlinePlayersIndicator: React.FC<OnlinePlayersIndicatorProps> = ({
                             <SheetHeader className="p-4 border-b border-gray-800">
                                 <SheetTitle className="flex items-center gap-2 text-green-400">
                                     <Users size={20} className="text-green-500" />
-                                    <span>Người chơi trực tuyến ({count})</span>
+                                    <span>Người chơi trực tuyến ({displayCount})</span>
                                 </SheetTitle>
                             </SheetHeader>
                             <div className="p-4">
-                                {filteredPlayers.length === 0 ? (
+                                {filteredPlayers.length === 0 && !user ? (
                                     <div className="text-center py-6 text-gray-400">
-                                        Không có người chơi khác trực tuyến
+                                        Không có người chơi trực tuyến
                                     </div>
                                 ) : (
                                     <div className="space-y-3">
@@ -168,21 +189,48 @@ export const OnlinePlayersIndicator: React.FC<OnlinePlayersIndicatorProps> = ({
                                                         </div>
                                                     </div>
                                                 </div>
-                                                <DropdownMenu>
-                                                    <DropdownMenuTrigger asChild>
-                                                        <Button variant="ghost" size="sm">
-                                                            <ChevronDown size={16} />
-                                                        </Button>
-                                                    </DropdownMenuTrigger>
-                                                    <DropdownMenuContent align="end">
-                                                        <DropdownMenuItem onClick={() => handleChallenge(player.id)}>
-                                                            <UserPlus className="mr-2 h-4 w-4" />
-                                                            <span>Thách đấu</span>
-                                                        </DropdownMenuItem>
-                                                    </DropdownMenuContent>
-                                                </DropdownMenu>
+                                                {user && (
+                                                    <DropdownMenu>
+                                                        <DropdownMenuTrigger asChild>
+                                                            <Button variant="ghost" size="sm">
+                                                                <ChevronDown size={16} />
+                                                            </Button>
+                                                        </DropdownMenuTrigger>
+                                                        <DropdownMenuContent align="end">
+                                                            <DropdownMenuItem onClick={() => handleChallenge(player.id)}>
+                                                                <UserPlus className="mr-2 h-4 w-4" />
+                                                                <span>Thách đấu</span>
+                                                            </DropdownMenuItem>
+                                                        </DropdownMenuContent>
+                                                    </DropdownMenu>
+                                                )}
                                             </div>
                                         ))}
+
+                                        {user && !players.some(p => p.id === user.id) && (
+                                            <div className="flex items-center justify-between p-2 rounded-md bg-blue-900/20 border border-blue-800/30">
+                                                <div className="flex items-center gap-3">
+                                                    <Avatar className="h-10 w-10 border border-blue-700">
+                                                        <AvatarImage src={profile?.avatar_url || undefined} alt="Bạn" />
+                                                        <AvatarFallback className="bg-blue-800">
+                                                            {getInitials(getDisplayName(user, profile))}
+                                                        </AvatarFallback>
+                                                    </Avatar>
+                                                    <div>
+                                                        <div className="font-medium flex items-center">
+                                                            {getDisplayName(user, profile)}
+                                                            <Badge variant="outline" className="ml-2 text-xs bg-blue-800/30 border-blue-700">Bạn</Badge>
+                                                        </div>
+                                                        {profile && (
+                                                            <div className="flex items-center text-sm text-gray-400">
+                                                                <Trophy size={14} className="mr-1 text-yellow-500" />
+                                                                <span>{profile.rating || 1200}</span>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
                                     </div>
                                 )}
                             </div>
