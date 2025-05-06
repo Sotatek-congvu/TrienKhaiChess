@@ -1,57 +1,33 @@
-import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '@/lib/supabase';
+import { useState, useRef, useEffect, useCallback } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
-import { GameState, PieceColor, Position, PieceType, Move, createInitialGameState } from '@/lib/chess-models';
-import { makeMove, dropPiece, isKingInCheck } from '@/lib/chess-logic';
-import { RealtimeChannel } from '@supabase/supabase-js';
+import { PieceColor, Position, GameState, PieceType } from '@/lib/chess-models';
+import { makeMove, dropPiece } from '@/lib/chess-logic';
+import { supabase } from '@/lib/supabase';
 import { toast } from 'sonner';
 
-// Define a type that extends Json to include GameState
-type Json = string | number | boolean | null | { [key: string]: Json } | Json[];
-type GameStateJson = GameState & { [key: string]: Json };
-
-interface UseOnlineGameProps {
+export interface UseOnlineGameProps {
     gameId?: string;
 }
 
-interface GameMessage {
-    id: string;
-    user_id: string;
-    content: string;
-    created_at: string;
-    username?: string;
-    avatar_url?: string;
-}
-
 export const useOnlineGame = ({ gameId }: UseOnlineGameProps) => {
-    // Auth and Game State
+    const navigate = useNavigate();
     const { user, profile } = useAuth();
     const [gameState, setGameState] = useState<GameState | null>(null);
-    const [opponent, setOpponent] = useState<any>(null);
     const [playerColor, setPlayerColor] = useState<PieceColor | null>(null);
+    const [opponent, setOpponent] = useState<any>(null);
     const [isMyTurn, setIsMyTurn] = useState<boolean>(false);
+    const [whiteTime, setWhiteTime] = useState<number>(600); // 10 min default
+    const [blackTime, setBlackTime] = useState<number>(600);
+    const [messages, setMessages] = useState<any[]>([]);
     const [gameResult, setGameResult] = useState<any>(null);
     const [isLoading, setIsLoading] = useState<boolean>(true);
     const [gameDetails, setGameDetails] = useState<any>(null);
 
-    // Time control
-    const [whiteTime, setWhiteTime] = useState<number>(600); // 10 min default
-    const [blackTime, setBlackTime] = useState<number>(600);
-    const [activeTimer, setActiveTimer] = useState<NodeJS.Timeout | null>(null);
-
-    // Messages
-    const [messages, setMessages] = useState<GameMessage[]>([]);
-    const [messageChannel, setMessageChannel] = useState<RealtimeChannel | null>(null);
-    const [gameChannel, setGameChannel] = useState<RealtimeChannel | null>(null);
-
-    // Disconnect from channels when component unmounts
-    useEffect(() => {
-        return () => {
-            messageChannel?.unsubscribe();
-            gameChannel?.unsubscribe();
-            if (activeTimer) clearInterval(activeTimer);
-        };
-    }, [messageChannel, gameChannel, activeTimer]);
+    // Refs for timers and channels
+    const activeTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const messageChannelRef = useRef<any>(null);
+    const gameChannelRef = useRef<any>(null);
 
     // Fetch game data when gameId changes
     useEffect(() => {
@@ -59,20 +35,27 @@ export const useOnlineGame = ({ gameId }: UseOnlineGameProps) => {
 
         const fetchGameData = async () => {
             setIsLoading(true);
+            console.log("Fetching game data for ID:", gameId);
 
             try {
                 // Fetch game data
                 const { data: gameData, error: gameError } = await supabase
                     .from('games')
                     .select(`
-            *,
-            white_player:white_player_id(id, username, display_name, avatar_url, rating),
-            black_player:black_player_id(id, username, display_name, avatar_url, rating)
-          `)
+                        *,
+                        white_player:white_player_id(id, username, display_name, avatar_url, rating),
+                        black_player:black_player_id(id, username, display_name, avatar_url, rating)
+                    `)
                     .eq('id', gameId)
                     .single();
 
-                if (gameError) throw gameError;
+                if (gameError) {
+                    console.error('Error fetching game data:', gameError);
+                    toast.error('Could not load game data');
+                    throw gameError;
+                }
+
+                console.log("Game data received:", gameData);
 
                 // Set up game data
                 setGameDetails(gameData);
@@ -84,12 +67,15 @@ export const useOnlineGame = ({ gameId }: UseOnlineGameProps) => {
                 if (gameData.white_player_id === user.id) {
                     setPlayerColor(PieceColor.WHITE);
                     setOpponent(gameData.black_player);
+                    console.log("You are playing as WHITE");
                 } else if (gameData.black_player_id === user.id) {
                     setPlayerColor(PieceColor.BLACK);
                     setOpponent(gameData.white_player);
+                    console.log("You are playing as BLACK");
                 } else {
                     // If user is not a player, they are a spectator
                     setPlayerColor(null);
+                    console.log("You are a SPECTATOR");
                 }
 
                 // Set whose turn it is
@@ -112,19 +98,21 @@ export const useOnlineGame = ({ gameId }: UseOnlineGameProps) => {
                 const { data: messagesData, error: messagesError } = await supabase
                     .from('messages')
                     .select(`
-            *,
-            sender:user_id(username, display_name, avatar_url)
-          `)
+                        *,
+                        sender:user_id(username, display_name, avatar_url)
+                    `)
                     .eq('game_id', gameId)
                     .order('created_at', { ascending: true });
 
-                if (messagesError) throw messagesError;
-
-                setMessages(messagesData.map(msg => ({
-                    ...msg,
-                    username: msg.sender?.display_name || msg.sender?.username,
-                    avatar_url: msg.sender?.avatar_url
-                })));
+                if (messagesError) {
+                    console.error('Error fetching messages:', messagesError);
+                } else {
+                    setMessages(messagesData.map(msg => ({
+                        ...msg,
+                        username: msg.sender?.display_name || msg.sender?.username,
+                        avatar_url: msg.sender?.avatar_url
+                    })));
+                }
 
                 // Set up realtime subscriptions
                 subscribeToGameUpdates(gameId);
@@ -135,18 +123,27 @@ export const useOnlineGame = ({ gameId }: UseOnlineGameProps) => {
                     startTimer(gameData.game_state as unknown as GameState);
                 }
             } catch (error) {
-                console.error('Error fetching game data:', error);
-                toast.error('Không thể tải dữ liệu trò chơi');
+                console.error('Error during game data retrieval:', error);
+                toast.error('Failed to load game data');
             } finally {
                 setIsLoading(false);
             }
         };
 
         fetchGameData();
+
+        // Cleanup function
+        return () => {
+            if (activeTimerRef.current) clearInterval(activeTimerRef.current);
+            if (messageChannelRef.current) messageChannelRef.current.unsubscribe();
+            if (gameChannelRef.current) gameChannelRef.current.unsubscribe();
+        };
     }, [gameId, user]);
 
     // Subscribe to game updates
-    const subscribeToGameUpdates = (gameId: string) => {
+    const subscribeToGameUpdates = useCallback((gameId: string) => {
+        console.log("Setting up game updates subscription for game:", gameId);
+
         const channel = supabase
             .channel(`game-${gameId}`)
             .on('postgres_changes', {
@@ -155,6 +152,7 @@ export const useOnlineGame = ({ gameId }: UseOnlineGameProps) => {
                 table: 'games',
                 filter: `id=eq.${gameId}`
             }, (payload) => {
+                console.log("Game update received:", payload);
                 const updatedGame = payload.new as any;
 
                 // Update game state
@@ -172,7 +170,7 @@ export const useOnlineGame = ({ gameId }: UseOnlineGameProps) => {
 
                 // Check if game has ended
                 if (updatedGame.status === 'completed' && gameDetails?.status !== 'completed') {
-                    if (activeTimer) clearInterval(activeTimer);
+                    if (activeTimerRef.current) clearInterval(activeTimerRef.current);
 
                     setGameResult({
                         status: updatedGame.status,
@@ -186,21 +184,24 @@ export const useOnlineGame = ({ gameId }: UseOnlineGameProps) => {
                     const isDraw = !updatedGame.winner_id && updatedGame.status === 'completed';
 
                     if (isWinner) {
-                        toast.success('Bạn đã thắng!');
+                        toast.success('You won!');
                     } else if (isDraw) {
-                        toast.info('Ván đấu kết thúc với kết quả hòa!');
+                        toast.info('The game ended in a draw!');
                     } else if (updatedGame.winner_id) {
-                        toast.error('Bạn đã thua!');
+                        toast.error('You lost!');
                     }
                 }
             })
             .subscribe();
 
-        setGameChannel(channel);
-    };
+        gameChannelRef.current = channel;
+        console.log("Game updates subscription established");
+    }, [user, playerColor, gameDetails]);
 
     // Subscribe to message updates
-    const subscribeToMessages = (gameId: string) => {
+    const subscribeToMessages = useCallback((gameId: string) => {
+        console.log("Setting up messages subscription for game:", gameId);
+
         const channel = supabase
             .channel(`messages-${gameId}`)
             .on('postgres_changes', {
@@ -209,7 +210,8 @@ export const useOnlineGame = ({ gameId }: UseOnlineGameProps) => {
                 table: 'messages',
                 filter: `game_id=eq.${gameId}`
             }, async (payload) => {
-                const newMessage = payload.new as GameMessage;
+                console.log("New message received:", payload);
+                const newMessage = payload.new as any;
 
                 // Fetch user details
                 const { data: userData } = await supabase
@@ -226,12 +228,13 @@ export const useOnlineGame = ({ gameId }: UseOnlineGameProps) => {
             })
             .subscribe();
 
-        setMessageChannel(channel);
-    };
+        messageChannelRef.current = channel;
+        console.log("Messages subscription established");
+    }, []);
 
     // Start game timer
-    const startTimer = (state: GameState) => {
-        if (activeTimer) clearInterval(activeTimer);
+    const startTimer = useCallback((state: GameState) => {
+        if (activeTimerRef.current) clearInterval(activeTimerRef.current);
 
         const timer = setInterval(() => {
             setWhiteTime(prev => state.currentPlayer === PieceColor.WHITE ? Math.max(0, prev - 1) : prev);
@@ -241,9 +244,8 @@ export const useOnlineGame = ({ gameId }: UseOnlineGameProps) => {
             checkTimeExpiration();
         }, 1000);
 
-        setActiveTimer(timer);
-        return () => clearInterval(timer);
-    };
+        activeTimerRef.current = timer;
+    }, []);
 
     // Check if either player's time has expired
     const checkTimeExpiration = useCallback(async () => {
@@ -254,125 +256,152 @@ export const useOnlineGame = ({ gameId }: UseOnlineGameProps) => {
 
         if (currentTime <= 0) {
             // Time expired
-            if (activeTimer) clearInterval(activeTimer);
+            if (activeTimerRef.current) clearInterval(activeTimerRef.current);
 
             const winner = currentColor === PieceColor.WHITE ? gameDetails.black_player_id : gameDetails.white_player_id;
 
-            // Update game with time expiration
-            await supabase
-                .from('games')
-                .update({
-                    status: 'completed',
-                    winner_id: winner,
-                    end_time: new Date().toISOString()
-                })
-                .eq('id', gameId);
+            try {
+                // Update game with time expiration
+                const { error } = await supabase
+                    .from('games')
+                    .update({
+                        status: 'completed',
+                        winner_id: winner,
+                        end_time: new Date().toISOString()
+                    })
+                    .eq('id', gameId);
 
-            // Show notification
-            if (winner === user?.id) {
-                toast.success('Đối thủ đã hết thời gian. Bạn thắng!');
-            } else {
-                toast.error('Bạn đã hết thời gian. Bạn thua!');
+                if (error) {
+                    console.error('Error updating game after time expiration:', error);
+                    return;
+                }
+
+                // Show notification
+                if (winner === user?.id) {
+                    toast.success('Your opponent ran out of time. You win!');
+                } else {
+                    toast.error('You ran out of time. You lose!');
+                }
+            } catch (error) {
+                console.error('Error handling time expiration:', error);
             }
         }
-    }, [gameDetails, gameState, whiteTime, blackTime, user, activeTimer]);
+    }, [gameDetails, gameState, whiteTime, blackTime, user, gameId]);
 
     // Make a move
     const makeGameMove = useCallback(async (from: Position, to: Position, promoteTo?: PieceType) => {
         if (!gameId || !user || !gameState || !isMyTurn || !playerColor) {
+            console.warn("Cannot make move - prerequisites not met:", {
+                gameIdExists: !!gameId,
+                userExists: !!user,
+                gameStateExists: !!gameState,
+                isMyTurn,
+                playerColorExists: !!playerColor
+            });
             return false;
         }
 
         try {
+            console.log("Making move from", from, "to", to);
+
             // Create new game state
             const newState = makeMove(gameState, from, to, promoteTo);
 
             // Calculate time increment
             const whiteTotalTime = playerColor === PieceColor.WHITE ?
-                whiteTime + gameDetails.increment_time : whiteTime;
+                whiteTime + (gameDetails?.increment_time || 0) : whiteTime;
             const blackTotalTime = playerColor === PieceColor.BLACK ?
-                blackTime + gameDetails.increment_time : blackTime;
+                blackTime + (gameDetails?.increment_time || 0) : blackTime;
 
             // Submit move to database
             const { error } = await supabase
                 .from('games')
                 .update({
-                    game_state: newState as unknown as Json,
-                    move_history: [...gameDetails.move_history, { from, to, promoteTo }],
+                    game_state: newState as unknown as any,
+                    move_history: [...(gameDetails?.move_history || []), { from, to, promoteTo }],
                     white_time_remaining: whiteTotalTime,
                     black_time_remaining: blackTotalTime,
                     last_move_time: new Date().toISOString(),
                     status: newState.isCheckmate || newState.isStalemate ? 'completed' : 'active',
                     winner_id: newState.isCheckmate ?
-                        (newState.currentPlayer === PieceColor.WHITE ? gameDetails.black_player_id : gameDetails.white_player_id) : null,
+                        (newState.currentPlayer === PieceColor.WHITE ? gameDetails?.black_player_id : gameDetails?.white_player_id) : null,
                     end_time: newState.isCheckmate || newState.isStalemate ? new Date().toISOString() : null
                 })
                 .eq('id', gameId);
 
-            if (error) throw error;
+            if (error) {
+                console.error('Error making move:', error);
+                toast.error('Failed to make move');
+                return false;
+            }
 
-            // Update local state
-            setGameState(newState);
-            setIsMyTurn(false);
-
+            console.log("Move successfully submitted");
             return true;
         } catch (error) {
             console.error('Error making move:', error);
-            toast.error('Không thể thực hiện nước đi');
+            toast.error('Failed to make move');
             return false;
         }
     }, [gameId, user, gameState, isMyTurn, playerColor, gameDetails, whiteTime, blackTime]);
 
     // Drop a piece from piece bank
-    const dropGamePiece = useCallback(async (pieceType: PieceType, position: Position) => {
+    const dropGamePiece = useCallback(async (pieceType: any, position: Position) => {
         if (!gameId || !user || !gameState || !isMyTurn || !playerColor) {
+            console.warn("Cannot drop piece - prerequisites not met");
             return false;
         }
 
         try {
-            // Create a proper ChessPiece object from the PieceType
-            const piece = {
-                id: Math.random().toString(36).substring(2, 10), // Generate a random id
-                type: pieceType,
-                color: playerColor,
-                hasMoved: false
-            };
+            console.log("Dropping piece type", pieceType, "at position", position);
 
-            // Create new game state
-            const newState = dropPiece(gameState, piece, position);
+            // Find piece in pieceBank
+            const pieceToDrop = gameState.pieceBank[playerColor].find(p => p.type === pieceType);
+
+            if (!pieceToDrop) {
+                console.error("Piece not found in bank");
+                return false;
+            }
+
+            // Create new game state with dropped piece
+            const newState = dropPiece(gameState, pieceToDrop, position);
 
             // Calculate time increment
             const whiteTotalTime = playerColor === PieceColor.WHITE ?
-                whiteTime + gameDetails.increment_time : whiteTime;
+                whiteTime + (gameDetails?.increment_time || 0) : whiteTime;
             const blackTotalTime = playerColor === PieceColor.BLACK ?
-                blackTime + gameDetails.increment_time : blackTime;
+                blackTime + (gameDetails?.increment_time || 0) : blackTime;
 
             // Submit move to database
             const { error } = await supabase
                 .from('games')
                 .update({
-                    game_state: newState as unknown as Json,
-                    move_history: [...gameDetails.move_history, { isDropped: true, piece: { type: pieceType, color: playerColor }, to: position }],
+                    game_state: newState as unknown as any,
+                    move_history: [...(gameDetails?.move_history || []), {
+                        isDropped: true,
+                        piece: { type: pieceType, color: playerColor },
+                        to: position
+                    }],
                     white_time_remaining: whiteTotalTime,
                     black_time_remaining: blackTotalTime,
                     last_move_time: new Date().toISOString(),
                     status: newState.isCheckmate || newState.isStalemate ? 'completed' : 'active',
                     winner_id: newState.isCheckmate ?
-                        (newState.currentPlayer === PieceColor.WHITE ? gameDetails.black_player_id : gameDetails.white_player_id) : null,
+                        (newState.currentPlayer === PieceColor.WHITE ? gameDetails?.black_player_id : gameDetails?.white_player_id) : null,
                     end_time: newState.isCheckmate || newState.isStalemate ? new Date().toISOString() : null
                 })
                 .eq('id', gameId);
 
-            if (error) throw error;
+            if (error) {
+                console.error('Error dropping piece:', error);
+                toast.error('Failed to drop piece');
+                return false;
+            }
 
-            // Update local state
-            setGameState(newState);
-            setIsMyTurn(false);
-
+            console.log("Piece successfully dropped");
             return true;
         } catch (error) {
             console.error('Error dropping piece:', error);
-            toast.error('Không thể thả quân');
+            toast.error('Failed to drop piece');
             return false;
         }
     }, [gameId, user, gameState, isMyTurn, playerColor, gameDetails, whiteTime, blackTime]);
@@ -384,6 +413,8 @@ export const useOnlineGame = ({ gameId }: UseOnlineGameProps) => {
         }
 
         try {
+            console.log("Sending message:", content);
+
             const { error } = await supabase
                 .from('messages')
                 .insert({
@@ -392,11 +423,16 @@ export const useOnlineGame = ({ gameId }: UseOnlineGameProps) => {
                     content: content.trim()
                 });
 
-            if (error) throw error;
+            if (error) {
+                console.error('Error sending message:', error);
+                toast.error('Failed to send message');
+                return false;
+            }
+
             return true;
         } catch (error) {
             console.error('Error sending message:', error);
-            toast.error('Không thể gửi tin nhắn');
+            toast.error('Failed to send message');
             return false;
         }
     }, [gameId, user]);
@@ -404,10 +440,13 @@ export const useOnlineGame = ({ gameId }: UseOnlineGameProps) => {
     // Resign from the game
     const resignGame = useCallback(async () => {
         if (!gameId || !user || !playerColor || gameDetails?.status !== 'active') {
+            console.warn("Cannot resign - prerequisites not met");
             return false;
         }
 
         try {
+            console.log("Resigning from game");
+
             // Determine the winner (the opponent)
             const winner = playerColor === PieceColor.WHITE ? gameDetails.black_player_id : gameDetails.white_player_id;
 
@@ -421,7 +460,14 @@ export const useOnlineGame = ({ gameId }: UseOnlineGameProps) => {
                 })
                 .eq('id', gameId);
 
-            if (error) throw error;
+            if (error) {
+                console.error('Error resigning game:', error);
+                toast.error('Failed to resign');
+                return false;
+            }
+
+            // Send a message about resignation
+            await sendMessage('📢 I resigned from the game');
 
             // Update local state
             setGameResult({
@@ -430,54 +476,55 @@ export const useOnlineGame = ({ gameId }: UseOnlineGameProps) => {
                 reason: 'resignation'
             });
 
-            toast.info('Bạn đã đầu hàng');
+            toast.info('You have resigned');
             return true;
         } catch (error) {
             console.error('Error resigning:', error);
-            toast.error('Không thể đầu hàng');
+            toast.error('Failed to resign');
             return false;
         }
-    }, [gameId, user, playerColor, gameDetails]);
+    }, [gameId, user, playerColor, gameDetails, sendMessage]);
 
     // Offer or accept a draw
-    const handleDraw = useCallback(async (accept?: boolean) => {
+    const handleDraw = useCallback(async () => {
         if (!gameId || !user || gameDetails?.status !== 'active') {
+            console.warn("Cannot handle draw - prerequisites not met");
             return false;
         }
 
         try {
+            console.log("Processing draw action");
+
             if (gameDetails.draw_offered_by && gameDetails.draw_offered_by !== user.id) {
                 // Accepting a draw offer
-                if (accept) {
-                    // Update game
-                    const { error } = await supabase
-                        .from('games')
-                        .update({
-                            status: 'completed',
-                            winner_id: null, // no winner in a draw
-                            draw_offered_by: null,
-                            end_time: new Date().toISOString()
-                        })
-                        .eq('id', gameId);
+                console.log("Accepting draw offer");
 
-                    if (error) throw error;
+                // Update game
+                const { error } = await supabase
+                    .from('games')
+                    .update({
+                        status: 'completed',
+                        winner_id: null, // no winner in a draw
+                        draw_offered_by: null,
+                        end_time: new Date().toISOString()
+                    })
+                    .eq('id', gameId);
 
-                    toast.info('Ván đấu kết thúc với kết quả hòa');
-                } else {
-                    // Declining a draw offer
-                    const { error } = await supabase
-                        .from('games')
-                        .update({
-                            draw_offered_by: null
-                        })
-                        .eq('id', gameId);
-
-                    if (error) throw error;
-
-                    toast.info('Bạn đã từ chối đề nghị hòa');
+                if (error) {
+                    console.error('Error accepting draw:', error);
+                    toast.error('Failed to accept draw');
+                    return false;
                 }
+
+                // Send a message about accepting draw
+                await sendMessage('📢 I accepted the draw offer');
+
+                toast.info('Game ended in a draw');
+                return true;
             } else if (!gameDetails.draw_offered_by) {
                 // Offering a draw
+                console.log("Offering draw");
+
                 const { error } = await supabase
                     .from('games')
                     .update({
@@ -485,36 +532,60 @@ export const useOnlineGame = ({ gameId }: UseOnlineGameProps) => {
                     })
                     .eq('id', gameId);
 
-                if (error) throw error;
+                if (error) {
+                    console.error('Error offering draw:', error);
+                    toast.error('Failed to offer draw');
+                    return false;
+                }
 
-                toast.info('Bạn đã đề nghị hòa');
+                // Send a message about draw offer
+                await sendMessage('📢 I offered a draw');
 
-                // Also send a system message
-                await supabase
-                    .from('messages')
-                    .insert({
-                        game_id: gameId,
-                        user_id: user.id,
-                        content: '📝 Đã đề nghị hòa'
-                    });
+                toast.info('Draw offered');
+                return true;
+            } else {
+                // Canceling own draw offer
+                console.log("Canceling own draw offer");
+
+                const { error } = await supabase
+                    .from('games')
+                    .update({
+                        draw_offered_by: null
+                    })
+                    .eq('id', gameId);
+
+                if (error) {
+                    console.error('Error canceling draw offer:', error);
+                    toast.error('Failed to cancel draw offer');
+                    return false;
+                }
+
+                // Send a message about canceling draw offer
+                await sendMessage('📢 I canceled my draw offer');
+
+                toast.info('Draw offer canceled');
+                return true;
             }
-
-            return true;
         } catch (error) {
             console.error('Error handling draw:', error);
-            toast.error('Không thể xử lý đề nghị hòa');
+            toast.error('Failed to process draw action');
             return false;
         }
-    }, [gameId, user, gameDetails]);
+    }, [gameId, user, gameDetails, sendMessage]);
 
-    // Create a new game and invite an opponent
+    // Create a new game
     const createGame = useCallback(async () => {
         if (!user) {
-            toast.error('Vui lòng đăng nhập để tạo trận đấu');
+            toast.error('You must be logged in to create a game');
             return null;
         }
 
         try {
+            console.log("Creating new game");
+
+            // Import the createInitialGameState function
+            const { createInitialGameState } = await import('@/lib/chess-models');
+
             // Create initial game state
             const initialState = createInitialGameState();
 
@@ -523,7 +594,7 @@ export const useOnlineGame = ({ gameId }: UseOnlineGameProps) => {
                 .from('games')
                 .insert({
                     white_player_id: user.id,
-                    game_state: initialState as unknown as Json,
+                    game_state: initialState as unknown as any,
                     move_history: [],
                     initial_time: 600, // 10 minutes
                     increment_time: 5,  // 5 seconds
@@ -533,13 +604,18 @@ export const useOnlineGame = ({ gameId }: UseOnlineGameProps) => {
                 .select()
                 .single();
 
-            if (error) throw error;
+            if (error) {
+                console.error('Error creating game:', error);
+                toast.error('Failed to create new game');
+                return null;
+            }
 
-            toast.success('Trận đấu đã được tạo. Đang chờ đối thủ...');
+            console.log("Game created successfully:", data.id);
+            toast.success('Game created. Waiting for opponent...');
             return data.id;
         } catch (error) {
             console.error('Error creating game:', error);
-            toast.error('Không thể tạo trận đấu mới');
+            toast.error('Failed to create new game');
             return null;
         }
     }, [user]);
@@ -547,11 +623,13 @@ export const useOnlineGame = ({ gameId }: UseOnlineGameProps) => {
     // Join an existing game
     const joinGame = useCallback(async (gameId: string) => {
         if (!user) {
-            toast.error('Vui lòng đăng nhập để tham gia trận đấu');
+            toast.error('You must be logged in to join a game');
             return false;
         }
 
         try {
+            console.log("Joining game:", gameId);
+
             // Check if game exists and is waiting for players
             const { data: game, error: fetchError } = await supabase
                 .from('games')
@@ -559,15 +637,19 @@ export const useOnlineGame = ({ gameId }: UseOnlineGameProps) => {
                 .eq('id', gameId)
                 .single();
 
-            if (fetchError) throw fetchError;
+            if (fetchError) {
+                console.error('Error fetching game:', fetchError);
+                toast.error('Game not found');
+                return false;
+            }
 
             if (game.status !== 'waiting') {
-                toast.error('Trận đấu này không sẵn sàng để tham gia');
+                toast.error('This game is not available to join');
                 return false;
             }
 
             if (game.white_player_id === user.id) {
-                toast.error('Bạn không thể chơi với chính mình');
+                toast.error('You cannot play against yourself');
                 return false;
             }
 
@@ -581,13 +663,18 @@ export const useOnlineGame = ({ gameId }: UseOnlineGameProps) => {
                 })
                 .eq('id', gameId);
 
-            if (joinError) throw joinError;
+            if (joinError) {
+                console.error('Error joining game:', joinError);
+                toast.error('Failed to join game');
+                return false;
+            }
 
-            toast.success('Đã tham gia trận đấu!');
+            console.log("Successfully joined game");
+            toast.success('Joined game!');
             return true;
         } catch (error) {
             console.error('Error joining game:', error);
-            toast.error('Không thể tham gia trận đấu');
+            toast.error('Failed to join game');
             return false;
         }
     }, [user]);

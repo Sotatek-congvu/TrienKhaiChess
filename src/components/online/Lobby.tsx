@@ -37,14 +37,6 @@ import {
     AvatarFallback,
     AvatarImage,
 } from "@/components/ui/avatar";
-import {
-    Dialog,
-    DialogContent,
-    DialogDescription,
-    DialogFooter,
-    DialogHeader,
-    DialogTitle,
-} from "@/components/ui/dialog";
 
 // Kiểu dữ liệu cho một trận đấu đang diễn ra
 interface ActiveGame {
@@ -69,38 +61,18 @@ interface ActiveGame {
     increment_time: number;
 }
 
-// Kiểu dữ liệu cho lời mời thách đấu qua WebSocket
-interface GameInvitation {
-    type: 'invite';
-    gameId: string;
-    inviterId: string;
-    invitedId: string;
-    inviterName: string;
-    time_control: number;
-    timestamp: number;
-}
-
-// Kiểu dữ liệu cho phản hồi lời mời
-interface InviteResponse {
-    type: 'accept' | 'decline';
-    gameId: string;
-    inviterId: string;
-    invitedId: string;
-}
-
 const Lobby = () => {
     const navigate = useNavigate();
     const { signOut, profile, user } = useAuth();
     const [showRules, setShowRules] = useState<boolean>(false);
-    const [isLoggingOut, setIsLoggingOut] = useState<boolean>(false);
+    const [isLoggingOut, setIsLoggingOut] = useState(false);
     const [activeGames, setActiveGames] = useState<ActiveGame[]>([]);
     const [isLoading, setIsLoading] = useState<boolean>(true);
     const [isCreatingGame, setIsCreatingGame] = useState<boolean>(false);
-    const [invitation, setInvitation] = useState<GameInvitation | null>(null);
-    const [ws, setWs] = useState<WebSocket | null>(null);
 
     // Sử dụng hook theo dõi người chơi online
     const { players, count } = useOnlinePlayers();
+
     const { createGame } = useOnlineGame({});
 
     const handleSignOut = async () => {
@@ -141,6 +113,7 @@ const Lobby = () => {
                 throw error;
             }
 
+            // Type assertion to ensure compatibility
             setActiveGames(data as unknown as ActiveGame[]);
         } catch (error) {
             console.error("Lỗi khi lấy danh sách trận đấu:", error);
@@ -150,119 +123,33 @@ const Lobby = () => {
         }
     }, []);
 
-    // Xử lý chấp nhận lời mời
-    const handleAcceptInvite = (invitation: GameInvitation) => {
-        if (!ws) return;
-        try {
-            const response: InviteResponse = {
-                type: 'accept',
-                gameId: invitation.gameId,
-                inviterId: invitation.inviterId,
-                invitedId: invitation.invitedId,
-            };
-            ws.send(JSON.stringify(response));
-            setInvitation(null);
-            navigate(`/game/${invitation.gameId}`);
-        } catch (error) {
-            console.error("Lỗi khi chấp nhận lời mời:", error);
-            toast.error("Không thể tham gia trận đấu");
-        }
-    };
-
-    // Xử lý từ chối lời mời
-    const handleDeclineInvite = (invitation: GameInvitation) => {
-        if (!ws) return;
-        try {
-            const response: InviteResponse = {
-                type: 'decline',
-                gameId: invitation.gameId,
-                inviterId: invitation.inviterId,
-                invitedId: invitation.invitedId,
-            };
-            ws.send(JSON.stringify(response));
-            setInvitation(null);
-            toast.success("Đã từ chối lời mời");
-        } catch (error) {
-            console.error("Lỗi khi từ chối lời mời:", error);
-            toast.error("Không thể từ chối lời mời");
-        }
-    };
-
-    // Thiết lập kết nối WebSocket
-    useEffect(() => {
-        if (!user) return;
-
-        // Thay thế bằng URL WebSocket server của bạn
-        const websocket = new WebSocket('ws://your-websocket-server:port');
-
-        websocket.onopen = () => {
-            console.log('WebSocket connected');
-            // Gửi thông tin đăng ký với user ID
-            websocket.send(JSON.stringify({ type: 'register', userId: user.id }));
-        };
-
-        websocket.onmessage = (event) => {
-            try {
-                const message = JSON.parse(event.data);
-                if (message.type === 'invite' && message.invitedId === user.id) {
-                    // Kiểm tra thời gian lời mời (không quá 30 giây)
-                    if (Date.now() - message.timestamp < 30000) {
-                        setInvitation(message);
-                    }
-                } else if (message.type === 'accept' && message.inviterId === user.id) {
-                    // Người mời nhận được chấp nhận
-                    navigate(`/game/${message.gameId}`);
-                } else if (message.type === 'decline' && message.inviterId === user.id) {
-                    // Người mời nhận được từ chối
-                    toast.error("Lời mời của bạn đã bị từ chối");
-                }
-            } catch (error) {
-                console.error("Lỗi khi xử lý tin nhắn WebSocket:", error);
-            }
-        };
-
-        websocket.onerror = (error) => {
-            console.error("WebSocket error:", error);
-            toast.error("Lỗi kết nối WebSocket");
-        };
-
-        websocket.onclose = () => {
-            console.log("WebSocket disconnected");
-            setWs(null);
-        };
-
-        setWs(websocket);
-
-        return () => {
-            websocket.close();
-        };
-    }, [user]);
-
-    // Lắng nghe cập nhật từ bảng games
     useEffect(() => {
         fetchActiveGames();
 
+        // Đăng ký kênh realtime để lắng nghe thay đổi từ bảng games
         const gamesChannel = supabase
             .channel('public:games')
             .on('postgres_changes',
                 { event: '*', schema: 'public', table: 'games' },
                 () => {
-                    fetchActiveGames();
+                    fetchActiveGames(); // Cập nhật danh sách trò chơi khi có thay đổi
                 }
             )
             .subscribe();
 
         return () => {
+            // Hủy đăng ký kênh khi component unmount
             gamesChannel.unsubscribe();
         };
     }, [fetchActiveGames]);
 
     // Xử lý tạo trò chơi mới
     const handleCreateGame = async (opponentId?: string) => {
-        if (isCreatingGame || !ws) return;
+        if (isCreatingGame) return; // Prevent multiple clicks
 
         try {
             setIsCreatingGame(true);
+            // Tạo thông báo đang thực hiện
             const toastId = toast.loading("Đang tạo trận đấu mới...");
 
             const gameId = await createGame();
@@ -270,21 +157,21 @@ const Lobby = () => {
                 toast.dismiss(toastId);
                 toast.success("Đã tạo trận đấu thành công");
 
+                // Nếu có người chơi được mời, gửi thông báo
                 if (opponentId) {
-                    // Gửi lời mời qua WebSocket
-                    const invitation: GameInvitation = {
-                        type: 'invite',
-                        gameId,
-                        inviterId: user?.id || '',
-                        invitedId: opponentId,
-                        inviterName: profile?.display_name || profile?.username || 'Người chơi',
-                        time_control: 300, // Mặc định 5 phút
-                        timestamp: Date.now(),
-                    };
-                    ws.send(JSON.stringify(invitation));
-                } else {
-                    navigate(`/game/${gameId}`);
+                    await supabase
+                        .from('messages')
+                        .insert({
+                            user_id: opponentId,
+                            content: `${profile?.display_name || profile?.username} đã mời bạn vào một trận đấu mới`,
+                            type: 'game_invite',
+                            game_id: gameId,
+                            created_at: new Date().toISOString(),
+                            read: false
+                        });
                 }
+
+                navigate(`/game/${gameId}`);
             }
         } catch (error) {
             console.error("Error creating game:", error);
@@ -301,12 +188,10 @@ const Lobby = () => {
 
     // Mời người chơi vào trận đấu mới
     const invitePlayer = async (playerId: string) => {
-        if (!ws) {
-            toast.error("Không thể kết nối đến server thách đấu");
-            return;
-        }
         try {
             toast.loading(`Đang mời người chơi...`);
+            // neu dong y moi thi tao game
+
             await handleCreateGame(playerId);
         } catch (error) {
             console.error("Lỗi khi mời người chơi:", error);
@@ -577,46 +462,11 @@ const Lobby = () => {
                         </Card>
                     </TabsContent>
                 </Tabs>
-
-                {/* Dialog cho lời mời thách đấu */}
-                <AnimatePresence>
-                    {invitation && (
-                        <Dialog
-                            open={!!invitation}
-                            onOpenChange={(open) => {
-                                if (!open) setInvitation(null);
-                            }}
-                        >
-                            <DialogContent className="bg-[#272522] text-white border-gray-700">
-                                <DialogHeader>
-                                    <DialogTitle>Lời mời thách đấu</DialogTitle>
-                                    <DialogDescription className="text-gray-400">
-                                        {`${invitation.inviterName} đã mời bạn vào một trận đấu (${Math.floor(invitation.time_control / 60)} phút).`}
-                                    </DialogDescription>
-                                </DialogHeader>
-                                <DialogFooter>
-                                    <Button
-                                        variant="secondary"
-                                        onClick={() => handleDeclineInvite(invitation)}
-                                    >
-                                        Từ chối
-                                    </Button>
-                                    <Button
-                                        variant="default"
-                                        onClick={() => handleAcceptInvite(invitation)}
-                                    >
-                                        Chấp nhận
-                                    </Button>
-                                </DialogFooter>
-                            </DialogContent>
-                        </Dialog>
-                    )}
-                </AnimatePresence>
-
-                <AnimatePresence>
-                    {showRules && <GameRules onClose={() => setShowRules(false)} />}
-                </AnimatePresence>
             </div>
+
+            <AnimatePresence>
+                {showRules && <GameRules onClose={() => setShowRules(false)} />}
+            </AnimatePresence>
         </div>
     );
 };
