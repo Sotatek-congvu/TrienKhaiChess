@@ -33,13 +33,6 @@ export const useOnlinePlayers = (): OnlinePlayersState => {
     const [channel, setChannel] = useState<RealtimeChannel | null>(null);
     const { user, profile } = useAuth();
 
-    // Helper to get a display name from various sources
-    const getDisplayName = (user: User | null, profile: Profile | null): string => {
-        if (profile?.display_name) return profile.display_name;
-        if (profile?.username) return profile.username;
-        if (user?.email) return user.email.split('@')[0];
-        return 'User';
-    };
 
     // Function to update presence status
     const updatePresence = useCallback(async () => {
