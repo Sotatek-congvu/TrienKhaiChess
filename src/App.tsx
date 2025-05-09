@@ -4,12 +4,14 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Routes, Route, HashRouter, Navigate, useNavigate, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
-import { useEffect } from "react";
+import { SocketProvider } from "@/context/SocketContext";
+import { useEffect, Suspense } from "react";
 import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
 import AuthPage from "./pages/auth/AuthPage";
 import Lobby from "./components/online/Lobby";
 import OnlineGame from "./components/online/OnlineGame";
+import { ChallengeNotifications } from "./components/ChallengeNotifications";
 
 const queryClient = new QueryClient();
 
@@ -37,8 +39,18 @@ const AppRoutes = () => {
     }
   }, [user, loading, navigate, location.pathname]);
 
+  // Log route changes
+  useEffect(() => {
+    console.log("Route changed:", {
+      path: location.pathname,
+      search: location.search,
+      hash: location.hash
+    });
+  }, [location]);
+
   // Loading state - show while authentication is being checked
   if (loading) {
+    console.log("Showing loading state");
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-[#312e2b] text-white">
         <div className="w-8 h-8 border-t-2 border-l-2 border-blue-500 rounded-full animate-spin mb-4"></div>
@@ -48,19 +60,38 @@ const AppRoutes = () => {
   }
 
   // Authentication check complete, render appropriate routes
+  console.log("Rendering routes");
   return (
     <Routes>
       <Route path="/login" element={
         user ? <Navigate to="/" replace /> : <AuthPage />
       } />
       <Route path="/" element={
-        user ? <Index /> : <Navigate to="/login" replace />
+        user ? (
+          <Suspense fallback={
+            <div className="flex flex-col items-center justify-center min-h-screen bg-[#312e2b] text-white">
+              <div className="w-8 h-8 border-t-2 border-l-2 border-blue-500 rounded-full animate-spin mb-4"></div>
+              <p>Đang tải game...</p>
+            </div>
+          }>
+            <Index />
+          </Suspense>
+        ) : <Navigate to="/login" replace />
       } />
       <Route path="/lobby" element={
         user ? <Lobby /> : <Navigate to="/login" replace />
       } />
       <Route path="/game/:gameId" element={
-        user ? <OnlineGame /> : <Navigate to="/login" replace />
+        user ? (
+          <Suspense fallback={
+            <div className="flex flex-col items-center justify-center min-h-screen bg-[#312e2b] text-white">
+              <div className="w-8 h-8 border-t-2 border-l-2 border-blue-500 rounded-full animate-spin mb-4"></div>
+              <p>Đang tải game...</p>
+            </div>
+          }>
+            <OnlineGame />
+          </Suspense>
+        ) : <Navigate to="/login" replace />
       } />
       <Route path="*" element={<NotFound />} />
     </Routes>
@@ -76,21 +107,22 @@ const AppWithAuth = () => {
 
   return (
     <HashRouter>
-      <AppRoutes />
+      <QueryClientProvider client={queryClient}>
+        <AuthProvider>
+          <SocketProvider>
+            <TooltipProvider>
+              <Toaster />
+              <Sonner />
+              <ChallengeNotifications />
+              <AppRoutes />
+            </TooltipProvider>
+          </SocketProvider>
+        </AuthProvider>
+      </QueryClientProvider>
     </HashRouter>
   );
 };
 
-const App = () => (
-  <QueryClientProvider client={queryClient}>
-    <AuthProvider>
-      <TooltipProvider>
-        <Toaster />
-        <Sonner />
-        <AppWithAuth />
-      </TooltipProvider>
-    </AuthProvider>
-  </QueryClientProvider>
-);
+const App = () => <AppWithAuth />;
 
 export default App;

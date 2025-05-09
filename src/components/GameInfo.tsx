@@ -1,130 +1,62 @@
-
 import { FC } from 'react';
 import { GameState, PieceColor, PieceType } from '@/lib/chess-models';
 import { getPieceSymbol } from './ChessPiece';
 import { cn } from '@/lib/utils';
 
-interface GameInfoProps {
-  gameState: GameState;
+export interface GameInfoProps {
+  whitePlayer: {
+    id: string;
+    displayName: string;
+    avatarUrl?: string;
+  } | null;
+  blackPlayer: {
+    id: string;
+    displayName: string;
+    avatarUrl?: string;
+  } | null;
+  currentPlayer: PieceColor;
+  whiteTime: number;
+  blackTime: number;
+  isGameActive: boolean;
+  winner: string | null;
 }
 
-const GameInfo: FC<GameInfoProps> = ({ gameState }) => {
-  const { currentPlayer, isCheck, isCheckmate, isStalemate } = gameState;
-  
-  // Count pieces on the board for each player
-  const whitePieces: Record<PieceType, number> = {
-    [PieceType.KING]: 0,
-    [PieceType.QUEEN]: 0,
-    [PieceType.ROOK]: 0,
-    [PieceType.KNIGHT]: 0,
-    [PieceType.BISHOP]: 0,
-    [PieceType.PAWN]: 0
+const GameInfo: FC<GameInfoProps> = ({
+  whitePlayer,
+  blackPlayer,
+  currentPlayer,
+  whiteTime,
+  blackTime,
+  isGameActive,
+  winner
+}) => {
+  const formatTime = (seconds: number) => {
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
   };
-  
-  const blackPieces: Record<PieceType, number> = {
-    [PieceType.KING]: 0,
-    [PieceType.QUEEN]: 0,
-    [PieceType.ROOK]: 0,
-    [PieceType.KNIGHT]: 0,
-    [PieceType.BISHOP]: 0,
-    [PieceType.PAWN]: 0
-  };
-  
-  // Count pieces on the board
-  for (let row = 0; row < 6; row++) {
-    for (let col = 0; col < 6; col++) {
-      const piece = gameState.board[row][col];
-      if (piece) {
-        if (piece.color === PieceColor.WHITE) {
-          whitePieces[piece.type]++;
-        } else {
-          blackPieces[piece.type]++;
-        }
-      }
-    }
-  }
-  
-  // Add pieces from piece bank
-  gameState.pieceBank[PieceColor.WHITE].forEach(piece => {
-    whitePieces[piece.type]++;
-  });
-  
-  gameState.pieceBank[PieceColor.BLACK].forEach(piece => {
-    blackPieces[piece.type]++;
-  });
-  
+
   return (
-    <div className="bg-[#272421] border border-[#3d3934] rounded-md p-4 text-white">
-      <h2 className="text-lg font-semibold mb-2">Thông tin trận đấu</h2>
-      
-      <div className="flex justify-between mb-3">
-        <div className={cn("font-medium", currentPlayer === PieceColor.WHITE && "text-yellow-400 font-bold")}>
-          Trắng
+    <div className="space-y-4">
+      <div className="flex justify-between items-center">
+        <div className="flex items-center gap-2">
+          <div className={`w-3 h-3 rounded-full ${currentPlayer === PieceColor.WHITE ? 'bg-white' : 'bg-gray-400'}`} />
+          <span className="font-medium">White: {whitePlayer?.displayName || 'Waiting...'}</span>
         </div>
-        <div className={cn("font-medium", currentPlayer === PieceColor.BLACK && "text-yellow-400 font-bold")}>
-          Đen
-        </div>
+        <span className="font-mono">{formatTime(whiteTime)}</span>
       </div>
-      
-      <div className="mb-4">
-        <div className="text-sm font-medium mb-2">Trạng thái:</div>
-        <div className="pl-2 text-sm">
-          {isCheckmate && <div className="text-red-500 font-bold">Chiếu hết!</div>}
-          {isCheck && !isCheckmate && <div className="text-amber-500 font-bold">Chiếu!</div>}
-          {isStalemate && <div className="text-blue-400 font-bold">Hòa cờ!</div>}
-          {!isCheck && !isCheckmate && !isStalemate && (
-            <div>Lượt {currentPlayer === PieceColor.WHITE ? "Trắng" : "Đen"}</div>
-          )}
+      <div className="flex justify-between items-center">
+        <div className="flex items-center gap-2">
+          <div className={`w-3 h-3 rounded-full ${currentPlayer === PieceColor.BLACK ? 'bg-black' : 'bg-gray-400'}`} />
+          <span className="font-medium">Black: {blackPlayer?.displayName || 'Waiting...'}</span>
         </div>
+        <span className="font-mono">{formatTime(blackTime)}</span>
       </div>
-
-      <div className="text-sm font-medium mb-2">Quân trên bàn cờ:</div>
-      <div className="grid grid-cols-2 gap-2">
-        <div className="text-xs space-y-1">
-          {Object.entries(whitePieces).map(([type, count]) => count > 0 && (
-            <div key={`white-${type}`} className="flex items-center gap-1">
-              <span>{getPieceSymbol(type as PieceType, PieceColor.WHITE)}</span>
-              <span>×{count}</span>
-            </div>
-          ))}
+      {winner && (
+        <div className="text-center font-bold text-lg">
+          {winner === 'draw' ? 'Game ended in a draw' : `${winner === whitePlayer?.id ? 'White' : 'Black'} wins!`}
         </div>
-        <div className="text-xs space-y-1">
-          {Object.entries(blackPieces).map(([type, count]) => count > 0 && (
-            <div key={`black-${type}`} className="flex items-center gap-1">
-              <span>{getPieceSymbol(type as PieceType, PieceColor.BLACK)}</span>
-              <span>×{count}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="mt-3 text-sm font-medium mb-2">Quân đã bắt (có thể thả):</div>
-      <div className="grid grid-cols-2 gap-2">
-        <div className="text-xs space-y-1">
-          {gameState.pieceBank[PieceColor.WHITE].length > 0 ? (
-            gameState.pieceBank[PieceColor.WHITE].map((piece, index) => (
-              <div key={`bank-white-${piece.type}-${index}`} className="flex items-center gap-1">
-                <span>{getPieceSymbol(piece.type, PieceColor.WHITE)}</span>
-                <span className="text-green-400">+</span>
-              </div>
-            ))
-          ) : (
-            <div className="italic text-gray-500">Chưa có quân</div>
-          )}
-        </div>
-        <div className="text-xs space-y-1">
-          {gameState.pieceBank[PieceColor.BLACK].length > 0 ? (
-            gameState.pieceBank[PieceColor.BLACK].map((piece, index) => (
-              <div key={`bank-black-${piece.type}-${index}`} className="flex items-center gap-1">
-                <span>{getPieceSymbol(piece.type, PieceColor.BLACK)}</span>
-                <span className="text-green-400">+</span>
-              </div>
-            ))
-          ) : (
-            <div className="italic text-gray-500">Chưa có quân</div>
-          )}
-        </div>
-      </div>
+      )}
     </div>
   );
 };

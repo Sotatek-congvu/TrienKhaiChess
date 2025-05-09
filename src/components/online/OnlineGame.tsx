@@ -15,6 +15,34 @@ import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import { Clock, MessageSquare, Flag, X, CopyIcon, HandshakeIcon, Loader2, Download, Maximize2, Minimize2 } from 'lucide-react';
 import GameAnalysis from '@/components/GameAnalysis';
+import { useSocket } from '@/context/SocketContext';
+import GameInfo from '../GameInfo';
+import MoveHistory from '../MoveHistory';
+import GameControls from '../GameControls';
+import { cn } from '@/lib/utils';
+import { Textarea } from '@/components/ui/textarea';
+import { ChevronDown, ChevronUp } from 'lucide-react';
+
+interface Player {
+    id: string;
+    username: string;
+    displayName: string;
+    avatarUrl?: string;
+    color: 'white' | 'black';
+}
+
+interface GameRoom {
+    roomId: string;
+    gameState: GameState;
+    whitePlayer: Player;
+    blackPlayer: Player;
+    spectators: any[];
+    whiteTime: number;
+    blackTime: number;
+    isGameActive: boolean;
+    winner: string | null;
+    moveHistory: any[];
+}
 
 export default function OnlineGame() {
     const { gameId } = useParams<{ gameId: string }>();
@@ -27,6 +55,11 @@ export default function OnlineGame() {
     const [analysisLoading, setAnalysisLoading] = useState(false);
     const [fullscreenAnalysis, setFullscreenAnalysis] = useState(false);
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const { socket, isConnected } = useSocket();
+    const [isLoading, setIsLoading] = useState(true);
+    const hasJoinedRoom = useRef(false);
+    const mountedRef = useRef(true);
+    const joinRoomAttempted = useRef(false);
 
     // Use useOnlineGame hook to connect to the game
     const {
@@ -38,14 +71,89 @@ export default function OnlineGame() {
         blackTime,
         messages,
         gameResult,
-        isLoading,
+        isLoading: useOnlineGameLoading,
         gameDetails,
-        makeMove,
+        makeMove: useOnlineGameMakeMove,
         dropPiece,
         sendMessage,
         resignGame,
         handleDraw
     } = useOnlineGame({ gameId });
+
+    // Effect to handle socket connection and room joining
+    useEffect(() => {
+        let mounted = true;
+
+        const joinRoom = async () => {
+            if (!gameId || !socket || !isConnected) {
+                console.log('Waiting for socket connection...', { gameId, socket: !!socket, isConnected });
+                return;
+            }
+
+            if (hasJoinedRoom.current || joinRoomAttempted.current) {
+                console.log('Already joined room or attempted to join');
+                return;
+            }
+
+            try {
+                console.log('Joining game room:', gameId);
+                joinRoomAttempted.current = true;
+
+                socket.emit('joinRoom', { roomId: gameId }, (response: any) => {
+                    if (!mounted) return;
+
+                    if (response.success) {
+                        console.log('Successfully joined room');
+                        hasJoinedRoom.current = true;
+                        setIsLoading(false);
+                    } else {
+                        console.error('Failed to join room:', response.error);
+                        toast.error('Không thể tham gia phòng game');
+                        navigate('/lobby');
+                    }
+                });
+            } catch (error) {
+                console.error('Error joining room:', error);
+                if (mounted) {
+                    toast.error('Lỗi kết nối phòng game');
+                    navigate('/lobby');
+                }
+            }
+        };
+
+        // Only attempt to join room if we have all required data
+        if (gameId && socket && isConnected && !hasJoinedRoom.current && !joinRoomAttempted.current) {
+            joinRoom();
+        }
+
+        return () => {
+            mounted = false;
+            if (socket && hasJoinedRoom.current) {
+                console.log('Leaving game room');
+                socket.emit('leaveRoom', { roomId: gameId });
+                hasJoinedRoom.current = false;
+                joinRoomAttempted.current = false;
+            }
+        };
+    }, [gameId, socket, isConnected, navigate]);
+
+    // Debug logging
+    useEffect(() => {
+        if (!mountedRef.current) return;
+
+        console.log('Game state:', {
+            gameId,
+            isConnected,
+            isLoading,
+            useOnlineGameLoading,
+            hasGameState: !!gameState,
+            hasGameDetails: !!gameDetails,
+            playerColor,
+            opponent,
+            hasJoinedRoom: hasJoinedRoom.current,
+            joinRoomAttempted: joinRoomAttempted.current
+        });
+    }, [gameId, isConnected, isLoading, useOnlineGameLoading, gameState, gameDetails, playerColor, opponent]);
 
     // Auto scroll messages
     useEffect(() => {
@@ -63,7 +171,7 @@ export default function OnlineGame() {
 
     // Handle piece move
     const handleMove = (from: Position, to: Position) => {
-        if (!isMyTurn || !playerColor) {
+        if (!isMyTurn || !playerColor || !gameId) {
             toast.error('Not your turn');
             return;
         }
@@ -71,7 +179,12 @@ export default function OnlineGame() {
         const convertedFrom = { row: from.row, col: from.col };
         const convertedTo = { row: to.row, col: to.col };
 
-        makeMove(convertedFrom, convertedTo);
+        // Send move to server
+        useOnlineGameMakeMove(
+            convertedFrom,
+            convertedTo,
+            undefined // no promotion
+        );
     };
 
     // Wrapper function to convert GameState-based moves to Position-based moves
@@ -91,12 +204,17 @@ export default function OnlineGame() {
 
     // Handle piece drop from bank
     const handlePieceDrop = (pieceType: any, position: Position) => {
-        if (!isMyTurn || !playerColor) {
+        if (!isMyTurn || !playerColor || !gameId) {
             toast.error('Not your turn');
             return;
         }
 
-        dropPiece(pieceType, position);
+        // Send drop move to server
+        useOnlineGameMakeMove(
+            { row: -1, col: -1 }, // Special position to indicate bank move
+            position,
+            pieceType // promotion piece type for dropped piece
+        );
     };
 
     // Handle sending message
@@ -112,7 +230,7 @@ export default function OnlineGame() {
     const handleCopyGameId = () => {
         if (gameId) {
             navigator.clipboard.writeText(gameId);
-            toast.success('Game ID copied to clipboard');
+            toast.success('Game ID đã được sao chép');
         }
     };
 
@@ -189,31 +307,33 @@ export default function OnlineGame() {
         }
     };
 
-    // Show loading if not logged in
-    if (!user) {
+    // Show loading state while connecting
+    if (!isConnected || isLoading || useOnlineGameLoading) {
         return (
-            <div className="flex flex-col items-center justify-center h-[60vh]">
-                <p className="text-xl mb-4">Please log in to play online</p>
-                <Button onClick={() => navigate('/auth')}>
-                    Log In / Sign Up
-                </Button>
+            <div className="flex flex-col items-center justify-center min-h-screen bg-[#312e2b] text-white">
+                <div className="w-8 h-8 border-t-2 border-l-2 border-blue-500 rounded-full animate-spin mb-4"></div>
+                <p>Đang kết nối với máy chủ game...</p>
             </div>
         );
     }
 
-    // Show loading spinner
-    if (isLoading) {
+    // Show error state if game data is not available
+    if (!gameState || !gameDetails) {
+        console.log('Game data not available:', { gameState, gameDetails });
         return (
-            <div className="container mx-auto py-8 max-w-6xl">
-                <div className="flex justify-center items-center h-96">
-                    <div className="text-center">
-                        <Loader2 className="h-12 w-12 animate-spin mx-auto mb-4" />
-                        <p className="text-lg">Loading game...</p>
-                    </div>
-                </div>
+            <div className="flex flex-col items-center justify-center min-h-screen bg-[#312e2b] text-white">
+                <p className="text-red-500 mb-4">Không thể tải game</p>
+                <Button onClick={() => navigate('/lobby')}>Quay lại Lobby</Button>
             </div>
         );
     }
+
+    const handleKeyPress = (e: React.KeyboardEvent) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            handleSendMessage(e);
+        }
+    };
 
     return (
         <div className="container mx-auto py-4 max-w-6xl">
@@ -305,7 +425,7 @@ export default function OnlineGame() {
                                 gameState={gameState}
                                 perspective={playerColor === 'white' ? PieceColor.WHITE : PieceColor.BLACK}
                                 onMove={handleGameStateMove}
-                                disabled={!isMyTurn || !!gameResult}
+                                disabled={!isMyTurn}
                                 showCoordinates={true}
                             />
                         </div>
@@ -463,11 +583,11 @@ export default function OnlineGame() {
                                     className="md:hidden"
                                     onClick={() => setShowChatMobile(false)}
                                 >
-                                    <X className="h-4 w-4" />
+                                    {showChatMobile ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
                                 </Button>
                             </div>
                         </CardHeader>
-                        <CardContent className="flex flex-col h-[calc(100%-4rem)]">
+                        <CardContent className={cn("flex flex-col h-[calc(100%-4rem)]", showChatMobile ? "block" : "hidden md:block")}>
                             <ScrollArea className="flex-1 mb-4">
                                 <div className="space-y-4 pr-4">
                                     {messages.map((msg, index) => (
@@ -489,11 +609,13 @@ export default function OnlineGame() {
                                 </div>
                             </ScrollArea>
                             <form onSubmit={handleSendMessage} className="flex gap-2">
-                                <Input
+                                <Textarea
                                     value={message}
                                     onChange={(e) => setMessage(e.target.value)}
                                     placeholder="Type a message..."
+                                    onKeyDown={handleKeyPress}
                                     disabled={!!gameResult}
+                                    className="min-h-[80px]"
                                 />
                                 <Button type="submit" disabled={!message.trim() || !!gameResult}>
                                     Send
@@ -510,7 +632,7 @@ export default function OnlineGame() {
                     <DialogHeader>
                         <DialogTitle>Resign Game</DialogTitle>
                         <DialogDescription>
-                            Are you sure you want to resign? This will count as a loss.
+                            Are you sure you want to resign? This action cannot be undone.
                         </DialogDescription>
                     </DialogHeader>
                     <DialogFooter>
@@ -549,6 +671,34 @@ export default function OnlineGame() {
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+
+            <div className="space-y-4">
+                <GameInfo
+                    whitePlayer={gameDetails.whitePlayer}
+                    blackPlayer={gameDetails.blackPlayer}
+                    currentPlayer={gameState.currentPlayer}
+                    whiteTime={gameDetails.whiteTime}
+                    blackTime={gameDetails.blackTime}
+                    isGameActive={gameDetails.isGameActive}
+                    winner={gameResult}
+                />
+                <MoveHistory gameState={gameState} />
+                <GameControls
+                    gameState={gameState}
+                    onNewGame={() => {/* Implement new game logic */ }}
+                    onUndo={() => {/* Implement undo logic */ }}
+                    onReset={() => {/* Implement reset logic */ }}
+                    onDrawOffer={handleDraw}
+                    onResign={handleResign}
+                    isGameActive={gameDetails.isGameActive}
+                    isPlayerTurn={isMyTurn}
+                    canUndo={false}
+                    isAIEnabled={false}
+                    onToggleAI={() => {/* No AI in online games */ }}
+                    isThinking={false}
+                    onReady={() => {/* Implement ready logic */ }}
+                />
+            </div>
         </div>
     );
 }

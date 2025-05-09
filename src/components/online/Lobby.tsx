@@ -25,6 +25,7 @@ import {
     CardDescription,
     CardHeader,
     CardTitle,
+    CardFooter,
 } from "@/components/ui/card";
 import {
     Tabs,
@@ -37,6 +38,9 @@ import {
     AvatarFallback,
     AvatarImage,
 } from "@/components/ui/avatar";
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { useSocket } from '@/context/SocketContext';
 
 // Kiểu dữ liệu cho một trận đấu đang diễn ra
 interface ActiveGame {
@@ -61,6 +65,14 @@ interface ActiveGame {
     increment_time: number;
 }
 
+interface GameRoom {
+    roomId: string;
+    whitePlayer: any;
+    blackPlayer: any;
+    spectators: any[];
+    isGameActive: boolean;
+}
+
 const Lobby = () => {
     const navigate = useNavigate();
     const { signOut, profile, user } = useAuth();
@@ -69,6 +81,9 @@ const Lobby = () => {
     const [activeGames, setActiveGames] = useState<ActiveGame[]>([]);
     const [isLoading, setIsLoading] = useState<boolean>(true);
     const [isCreatingGame, setIsCreatingGame] = useState<boolean>(false);
+    const { socket, isConnected, createRoom, sendChallenge } = useSocket();
+    const [rooms, setRooms] = useState<GameRoom[]>([]);
+    const [timeLimit, setTimeLimit] = useState(600); // 10 minutes default
 
     // Sử dụng hook theo dõi người chơi online
     const { players, count } = useOnlinePlayers();
@@ -143,6 +158,35 @@ const Lobby = () => {
         };
     }, [fetchActiveGames]);
 
+    useEffect(() => {
+        if (!isConnected) return;
+
+        // Listen for room list updates
+        socket?.on('roomList', (roomList: GameRoom[]) => {
+            console.log('Room list updated:', roomList);
+            setRooms(roomList);
+        });
+
+        // Listen for room creation success
+        socket?.on('roomCreated', (roomId: string) => {
+            console.log('Room created:', roomId);
+            navigate(`/game/${roomId}`);
+        });
+
+        // Listen for errors
+        socket?.on('error', (error: string) => {
+            console.error('Lobby error:', error);
+            toast.error(error);
+        });
+
+        // Cleanup
+        return () => {
+            socket?.off('roomList');
+            socket?.off('roomCreated');
+            socket?.off('error');
+        };
+    }, [isConnected, socket, navigate]);
+
     // Xử lý tạo trò chơi mới
     const handleCreateGame = async (opponentId?: string) => {
         if (isCreatingGame) return; // Prevent multiple clicks
@@ -187,16 +231,27 @@ const Lobby = () => {
     };
 
     // Mời người chơi vào trận đấu mới
-    const invitePlayer = async (playerId: string) => {
-        try {
-            toast.loading(`Đang mời người chơi...`);
-            // neu dong y moi thi tao game
-
-            await handleCreateGame(playerId);
-        } catch (error) {
-            console.error("Lỗi khi mời người chơi:", error);
-            toast.error("Không thể mời người chơi");
+    const invitePlayer = (playerId: string) => {
+        if (!user) {
+            toast.error('Vui lòng đăng nhập để thách đấu');
+            return;
         }
+
+        if (playerId === user.id) {
+            toast.error('Bạn không thể thách đấu chính mình');
+            return;
+        }
+
+        toast.loading('Đang gửi lời thách đấu...');
+        sendChallenge(playerId);
+    };
+
+    const handleCreateRoom = () => {
+        createRoom({ timeLimit });
+    };
+
+    const handleJoinRoom = (roomId: string) => {
+        navigate(`/game/${roomId}`);
     };
 
     return (
@@ -417,7 +472,7 @@ const Lobby = () => {
                         <Card className="bg-[#272522] border-gray-700">
                             <CardHeader>
                                 <CardTitle>Người chơi trực tuyến ({count})</CardTitle>
-                                <CardDescription className="text-gray-400">
+                                <CardDescription>
                                     Tìm và thách đấu người chơi khác
                                 </CardDescription>
                             </CardHeader>
@@ -467,6 +522,72 @@ const Lobby = () => {
             <AnimatePresence>
                 {showRules && <GameRules onClose={() => setShowRules(false)} />}
             </AnimatePresence>
+
+            <div className="container mx-auto p-4 mt-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* Create Room Section */}
+                    <Card>
+                        <CardHeader>
+                            <CardTitle>Tạo phòng mới</CardTitle>
+                            <CardDescription>Tạo một phòng chơi mới và mời bạn bè tham gia</CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="space-y-4">
+                                <div className="space-y-2">
+                                    <Label htmlFor="timeLimit">Thời gian (giây)</Label>
+                                    <Input
+                                        id="timeLimit"
+                                        type="number"
+                                        min="60"
+                                        max="3600"
+                                        value={timeLimit}
+                                        onChange={(e) => setTimeLimit(Number(e.target.value))}
+                                    />
+                                </div>
+                            </div>
+                        </CardContent>
+                        <CardFooter>
+                            <Button onClick={handleCreateRoom} className="w-full">
+                                Tạo phòng
+                            </Button>
+                        </CardFooter>
+                    </Card>
+
+                    {/* Room List Section */}
+                    <Card>
+                        <CardHeader>
+                            <CardTitle>Danh sách phòng</CardTitle>
+                            <CardDescription>Chọn một phòng để tham gia</CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="space-y-4">
+                                {!rooms || rooms.length === 0 ? (
+                                    <p className="text-center text-muted-foreground">Không có phòng nào</p>
+                                ) : (
+                                    rooms.map((room) => (
+                                        <Card key={room.roomId} className="cursor-pointer hover:bg-accent" onClick={() => handleJoinRoom(room.roomId)}>
+                                            <CardContent>
+                                                <div className="flex justify-between items-center">
+                                                    <div>
+                                                        <p className="font-medium">Phòng {room.roomId}</p>
+                                                        <p className="text-sm text-muted-foreground">
+                                                            {room.whitePlayer ? 'Trắng: ' + room.whitePlayer.displayName : 'Chờ người chơi trắng'} |{' '}
+                                                            {room.blackPlayer ? 'Đen: ' + room.blackPlayer.displayName : 'Chờ người chơi đen'}
+                                                        </p>
+                                                    </div>
+                                                    <div className="text-sm text-muted-foreground">
+                                                        {room.spectators?.length || 0} người xem
+                                                    </div>
+                                                </div>
+                                            </CardContent>
+                                        </Card>
+                                    ))
+                                )}
+                            </div>
+                        </CardContent>
+                    </Card>
+                </div>
+            </div>
         </div>
     );
 };

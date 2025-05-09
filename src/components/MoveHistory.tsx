@@ -1,91 +1,51 @@
-
 import { FC } from 'react';
-import { GameState, Move, positionToAlgebraic } from '@/lib/chess-models';
+import { GameState, positionToAlgebraic } from '@/lib/chess-models';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 
-interface MoveHistoryProps {
-  gameState: GameState;
-  onMoveClick?: (index: number) => void;
+export interface Move {
+  from: { row: number; col: number };
+  to: { row: number; col: number };
+  piece: string;
+  capturedPiece?: string;
+  isCheck?: boolean;
+  isCheckmate?: boolean;
 }
 
-const MoveHistory: FC<MoveHistoryProps> = ({ gameState, onMoveClick }) => {
-  const { moveHistory } = gameState;
+export interface MoveHistoryProps {
+  gameState: GameState;
+}
 
-  const formatMove = (move: Move): string => {
-    const from = positionToAlgebraic(move.from);
-    const to = positionToAlgebraic(move.to);
-    
-    let notation = `${from}-${to}`;
-    
-    if (move.isPromotion && move.promoteTo) {
-      notation += `=${move.promoteTo.charAt(0).toUpperCase()}`;
-    }
-    
-    if (move.isCheckmate) {
-      notation += '#';
-    } else if (move.isCheck) {
-      notation += '+';
-    }
-    
-    return notation;
-  };
-
-  // Group moves by pairs (white and black)
-  const groupedMoves: [string, string | null][] = [];
-  for (let i = 0; i < moveHistory.length; i += 2) {
-    const whiteMove = moveHistory[i] ? formatMove(moveHistory[i]) : null;
-    const blackMove = moveHistory[i + 1] ? formatMove(moveHistory[i + 1]) : null;
-    groupedMoves.push([whiteMove!, blackMove]);
-  }
+const MoveHistory: FC<MoveHistoryProps> = ({ gameState }) => {
+  const moves = gameState.moveHistory || [];
 
   return (
-    <div className="bg-white/10 backdrop-blur-md rounded-xl border border-white/20 overflow-hidden w-full">
-      <h3 className="px-4 py-3 font-semibold border-b border-white/10 bg-white/5">Move History</h3>
-      <ScrollArea className="h-[240px] w-full">
-        <div className="p-4">
-          {groupedMoves.length === 0 ? (
-            <div className="text-center text-sm opacity-70 py-4">
-              No moves yet
-            </div>
-          ) : (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left border-b border-white/10">
-                  <th className="pb-2 font-medium">#</th>
-                  <th className="pb-2 font-medium">White</th>
-                  <th className="pb-2 font-medium">Black</th>
-                </tr>
-              </thead>
-              <tbody>
-                {groupedMoves.map((moves, index) => (
-                  <tr key={index} className="border-b border-white/5 last:border-0">
-                    <td className="py-2 opacity-70">{index + 1}.</td>
-                    <td 
-                      className={cn(
-                        "py-2", 
-                        onMoveClick && "cursor-pointer hover:text-primary"
-                      )}
-                      onClick={() => onMoveClick?.(index * 2)}
-                    >
-                      {moves[0]}
-                    </td>
-                    <td 
-                      className={cn(
-                        "py-2", 
-                        moves[1] && onMoveClick && "cursor-pointer hover:text-primary"
-                      )}
-                      onClick={() => moves[1] && onMoveClick?.(index * 2 + 1)}
-                    >
-                      {moves[1] || ''}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      </ScrollArea>
+    <div className="space-y-2">
+      <h3 className="font-medium">Lịch sử nước đi</h3>
+      <div className="max-h-60 overflow-y-auto">
+        {moves.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Chưa có nước đi nào</p>
+        ) : (
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+            {moves.map((move, index) => {
+              const moveNumber = Math.floor(index / 2) + 1;
+              const isWhiteMove = index % 2 === 0;
+              const from = `${String.fromCharCode(97 + move.from.col)}${6 - move.from.row}`;
+              const to = `${String.fromCharCode(97 + move.to.col)}${6 - move.to.row}`;
+              const moveText = `${move.piece}${from}-${to}${move.isCheckmate ? '#' : move.isCheck ? '+' : ''}`;
+
+              return (
+                <div key={index} className="flex items-center gap-2">
+                  {isWhiteMove && <span className="text-muted-foreground">{moveNumber}.</span>}
+                  <span className={isWhiteMove ? 'text-white' : 'text-gray-400'}>
+                    {moveText}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </div>
   );
 };

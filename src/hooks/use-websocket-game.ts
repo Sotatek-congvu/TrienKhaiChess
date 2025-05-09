@@ -5,7 +5,7 @@ import { PieceColor, Position, GameState, PieceType } from '@/lib/chess-models';
 import { toast } from 'sonner';
 
 // Define the server URL - adjust based on your deployment
-const SOCKET_SERVER_URL = import.meta.env.VITE_SOCKET_SERVER_URL || 'http://localhost:3001';
+const SOCKET_SERVER_URL = import.meta.env.VITE_SOCKET_SERVER_URL || 'http://localhost:3005';
 
 interface Player {
     id: string;

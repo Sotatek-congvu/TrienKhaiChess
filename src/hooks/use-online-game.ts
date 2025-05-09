@@ -28,12 +28,14 @@ export const useOnlineGame = ({ gameId }: UseOnlineGameProps) => {
     const activeTimerRef = useRef<NodeJS.Timeout | null>(null);
     const messageChannelRef = useRef<any>(null);
     const gameChannelRef = useRef<any>(null);
+    const mountedRef = useRef(true);
 
     // Fetch game data when gameId changes
     useEffect(() => {
         if (!gameId || !user) return;
 
         const fetchGameData = async () => {
+            if (!mountedRef.current) return;
             setIsLoading(true);
             console.log("Fetching game data for ID:", gameId);
 
@@ -54,6 +56,8 @@ export const useOnlineGame = ({ gameId }: UseOnlineGameProps) => {
                     toast.error('Could not load game data');
                     throw gameError;
                 }
+
+                if (!mountedRef.current) return;
 
                 console.log("Game data received:", gameData);
 
@@ -104,6 +108,8 @@ export const useOnlineGame = ({ gameId }: UseOnlineGameProps) => {
                     .eq('game_id', gameId)
                     .order('created_at', { ascending: true });
 
+                if (!mountedRef.current) return;
+
                 if (messagesError) {
                     console.error('Error fetching messages:', messagesError);
                 } else {
@@ -115,17 +121,27 @@ export const useOnlineGame = ({ gameId }: UseOnlineGameProps) => {
                 }
 
                 // Set up realtime subscriptions
-                subscribeToGameUpdates(gameId);
-                subscribeToMessages(gameId);
+                await Promise.all([
+                    new Promise<void>((resolve) => {
+                        subscribeToGameUpdates(gameId);
+                        resolve();
+                    }),
+                    new Promise<void>((resolve) => {
+                        subscribeToMessages(gameId);
+                        resolve();
+                    })
+                ]);
 
                 // Set up timer if game is active
                 if (gameData.status === 'active') {
                     startTimer(gameData.game_state as unknown as GameState);
                 }
+
+                // Only set loading to false after all async operations are complete
+                setIsLoading(false);
             } catch (error) {
                 console.error('Error during game data retrieval:', error);
                 toast.error('Failed to load game data');
-            } finally {
                 setIsLoading(false);
             }
         };
@@ -144,92 +160,129 @@ export const useOnlineGame = ({ gameId }: UseOnlineGameProps) => {
     const subscribeToGameUpdates = useCallback((gameId: string) => {
         console.log("Setting up game updates subscription for game:", gameId);
 
-        const channel = supabase
-            .channel(`game-${gameId}`)
-            .on('postgres_changes', {
-                event: 'UPDATE',
-                schema: 'public',
-                table: 'games',
-                filter: `id=eq.${gameId}`
-            }, (payload) => {
-                console.log("Game update received:", payload);
-                const updatedGame = payload.new as any;
-
-                // Update game state
-                setGameState(updatedGame.game_state as GameState);
-                setGameDetails(prev => ({ ...prev, ...updatedGame }));
-
-                // Update whose turn it is
-                if (playerColor) {
-                    setIsMyTurn((updatedGame.game_state as GameState).currentPlayer === playerColor);
-                }
-
-                // Update time
-                setWhiteTime(updatedGame.white_time_remaining);
-                setBlackTime(updatedGame.black_time_remaining);
-
-                // Check if game has ended
-                if (updatedGame.status === 'completed' && gameDetails?.status !== 'completed') {
-                    if (activeTimerRef.current) clearInterval(activeTimerRef.current);
-
-                    setGameResult({
-                        status: updatedGame.status,
-                        winner: updatedGame.winner_id,
-                        reason: (updatedGame.game_state as GameState).isCheckmate ? 'checkmate' :
-                            (updatedGame.game_state as GameState).isStalemate ? 'stalemate' : 'other'
-                    });
-
-                    // Show toast notification
-                    const isWinner = updatedGame.winner_id === user?.id;
-                    const isDraw = !updatedGame.winner_id && updatedGame.status === 'completed';
-
-                    if (isWinner) {
-                        toast.success('You won!');
-                    } else if (isDraw) {
-                        toast.info('The game ended in a draw!');
-                    } else if (updatedGame.winner_id) {
-                        toast.error('You lost!');
+        try {
+            const channel = supabase
+                .channel(`game-${gameId}`)
+                .on('postgres_changes', {
+                    event: 'UPDATE',
+                    schema: 'public',
+                    table: 'games',
+                    filter: `id=eq.${gameId}`
+                }, (payload) => {
+                    console.log("Game update received:", payload);
+                    if (!payload.new) {
+                        console.error("Invalid payload received:", payload);
+                        return;
                     }
-                }
-            })
-            .subscribe();
+                    const updatedGame = payload.new as any;
 
-        gameChannelRef.current = channel;
-        console.log("Game updates subscription established");
+                    // Update game state
+                    setGameState(updatedGame.game_state as GameState);
+                    setGameDetails(prev => ({ ...prev, ...updatedGame }));
+
+                    // Update whose turn it is
+                    if (playerColor) {
+                        setIsMyTurn((updatedGame.game_state as GameState).currentPlayer === playerColor);
+                    }
+
+                    // Update time
+                    setWhiteTime(updatedGame.white_time_remaining);
+                    setBlackTime(updatedGame.black_time_remaining);
+
+                    // Check if game has ended
+                    if (updatedGame.status === 'completed' && gameDetails?.status !== 'completed') {
+                        if (activeTimerRef.current) clearInterval(activeTimerRef.current);
+
+                        setGameResult({
+                            status: updatedGame.status,
+                            winner: updatedGame.winner_id,
+                            reason: (updatedGame.game_state as GameState).isCheckmate ? 'checkmate' :
+                                (updatedGame.game_state as GameState).isStalemate ? 'stalemate' : 'other'
+                        });
+
+                        // Show toast notification
+                        const isWinner = updatedGame.winner_id === user?.id;
+                        const isDraw = !updatedGame.winner_id && updatedGame.status === 'completed';
+
+                        if (isWinner) {
+                            toast.success('You won!');
+                        } else if (isDraw) {
+                            toast.info('The game ended in a draw!');
+                        } else if (updatedGame.winner_id) {
+                            toast.error('You lost!');
+                        }
+                    }
+                })
+                .subscribe((status) => {
+                    if (status === 'SUBSCRIBED') {
+                        console.log("Successfully subscribed to game updates");
+                    } else {
+                        console.error("Failed to subscribe to game updates:", status);
+                        toast.error("Failed to connect to game server");
+                    }
+                });
+
+            gameChannelRef.current = channel;
+            console.log("Game updates subscription established");
+        } catch (error) {
+            console.error("Error setting up game subscription:", error);
+            toast.error("Failed to connect to game server");
+        }
     }, [user, playerColor, gameDetails]);
 
     // Subscribe to message updates
     const subscribeToMessages = useCallback((gameId: string) => {
         console.log("Setting up messages subscription for game:", gameId);
 
-        const channel = supabase
-            .channel(`messages-${gameId}`)
-            .on('postgres_changes', {
-                event: 'INSERT',
-                schema: 'public',
-                table: 'messages',
-                filter: `game_id=eq.${gameId}`
-            }, async (payload) => {
-                console.log("New message received:", payload);
-                const newMessage = payload.new as any;
+        try {
+            const channel = supabase
+                .channel(`messages-${gameId}`)
+                .on('postgres_changes', {
+                    event: 'INSERT',
+                    schema: 'public',
+                    table: 'messages',
+                    filter: `game_id=eq.${gameId}`
+                }, async (payload) => {
+                    console.log("New message received:", payload);
+                    if (!payload.new) {
+                        console.error("Invalid message payload received:", payload);
+                        return;
+                    }
+                    const newMessage = payload.new as any;
 
-                // Fetch user details
-                const { data: userData } = await supabase
-                    .from('profiles')
-                    .select('username, display_name, avatar_url')
-                    .eq('id', newMessage.user_id)
-                    .single();
+                    // Fetch user details
+                    const { data: userData, error: userError } = await supabase
+                        .from('profiles')
+                        .select('username, display_name, avatar_url')
+                        .eq('id', newMessage.user_id)
+                        .single();
 
-                setMessages(prev => [...prev, {
-                    ...newMessage,
-                    username: userData?.display_name || userData?.username,
-                    avatar_url: userData?.avatar_url
-                }]);
-            })
-            .subscribe();
+                    if (userError) {
+                        console.error("Error fetching user details:", userError);
+                        return;
+                    }
 
-        messageChannelRef.current = channel;
-        console.log("Messages subscription established");
+                    setMessages(prev => [...prev, {
+                        ...newMessage,
+                        username: userData?.display_name || userData?.username,
+                        avatar_url: userData?.avatar_url
+                    }]);
+                })
+                .subscribe((status) => {
+                    if (status === 'SUBSCRIBED') {
+                        console.log("Successfully subscribed to messages");
+                    } else {
+                        console.error("Failed to subscribe to messages:", status);
+                        toast.error("Failed to connect to chat server");
+                    }
+                });
+
+            messageChannelRef.current = channel;
+            console.log("Messages subscription established");
+        } catch (error) {
+            console.error("Error setting up message subscription:", error);
+            toast.error("Failed to connect to chat server");
+        }
     }, []);
 
     // Start game timer

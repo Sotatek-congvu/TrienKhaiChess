@@ -15,20 +15,42 @@ const io = new Server(server, {
     }
 });
 
-// Game rooms and player tracking
+const PORT = process.env.PORT || 3005;
+
+// Game state management
 const rooms = new Map();
-const playersInRoom = new Map();
+const players = new Map();
+const waitingPlayers = new Map();
+
+// Challenge related data structures
+const challenges = new Map(); // Map<challengeId, Challenge>
+const userChallenges = new Map(); // Map<userId, Set<challengeId>>
+
+// Timeouts
+const CHALLENGE_TIMEOUT = 5 * 60 * 1000; // 5 minutes for challenge timeout
+const RECONNECT_TIMEOUT = 30000; // 30 seconds for reconnect timeout
+
+// Game rooms and player tracking
 const connectedPlayers = new Map(); // Track all connected players
-const playerChallenges = new Map(); // Track active challenges
 const playersLookingForGame = []; // Queue of players looking for a game
+const disconnectedPlayers = new Map(); // Track disconnected players for reconnection
+const gameStates = new Map(); // Track game states for reconnection
 
 // WebSocket connection handling
 io.on('connection', (socket) => {
-    console.log(`User connected: ${socket.id}`);
+    // Validate required connection information
+    const userId = socket.handshake.auth.userId;
+    const username = socket.handshake.auth.username;
 
-    // Get user information from auth
-    const userId = socket.handshake.auth.userId || socket.id;
-    const username = socket.handshake.auth.username || 'Anonymous';
+    if (!userId || !username) {
+        socket.emit('error', 'Missing required connection information: userId and username are required');
+        socket.disconnect(true);
+        return;
+    }
+
+    console.log(`User connected: ${username} (${userId})`);
+
+    // Get additional user information
     const displayName = socket.handshake.auth.displayName || username;
     const avatarUrl = socket.handshake.auth.avatarUrl;
 
@@ -50,6 +72,10 @@ io.on('connection', (socket) => {
 
     // Broadcast updated player list to all clients
     broadcastPlayerList();
+
+    // Send current challenges to the player
+    const playerChallenges = getPlayerChallenges(userId);
+    socket.emit('challenges:sync', playerChallenges);
 
     // Create a new game room
     socket.on('createRoom', (gameOptions = {}) => {
@@ -79,7 +105,7 @@ io.on('connection', (socket) => {
 
         // Store room and track player
         rooms.set(roomId, gameRoom);
-        playersInRoom.set(userId, roomId);
+        players.set(userId, roomId);
 
         // Join socket room
         socket.join(roomId);
@@ -102,10 +128,10 @@ io.on('connection', (socket) => {
     });
 
     // Join an existing room
-    socket.on('joinRoom', ({ roomId, asSpectator = false }) => {
+    socket.on('joinRoom', ({ roomId, asSpectator = false }, callback) => {
         // Check if room exists
         if (!rooms.has(roomId)) {
-            socket.emit('error', 'Room does not exist');
+            if (callback) callback({ success: false, error: 'Room does not exist' });
             return;
         }
 
@@ -116,10 +142,11 @@ io.on('connection', (socket) => {
             // Join as spectator
             room.spectators.push({ ...player });
             socket.join(roomId);
-            playersInRoom.set(userId, roomId);
+            players.set(userId, roomId);
 
             socket.emit('roomJoined', room);
             socket.to(roomId).emit('playerJoined', { ...player, role: 'spectator' });
+            if (callback) callback({ success: true });
             return;
         }
 
@@ -127,17 +154,21 @@ io.on('connection', (socket) => {
         if (!room.whitePlayer) {
             room.whitePlayer = { ...player, color: 'white' };
             socket.join(roomId);
-            playersInRoom.set(userId, roomId);
+            players.set(userId, roomId);
 
             socket.emit('roomJoined', room);
             socket.to(roomId).emit('playerJoined', { ...player, color: 'white' });
+            if (callback) callback({ success: true });
         } else if (!room.blackPlayer) {
             room.blackPlayer = { ...player, color: 'black' };
             socket.join(roomId);
-            playersInRoom.set(userId, roomId);
+            players.set(userId, roomId);
 
             socket.emit('roomJoined', room);
             socket.to(roomId).emit('playerJoined', { ...player, color: 'black' });
+            if (callback) callback({ success: true });
+        } else {
+            if (callback) callback({ success: false, error: 'Room is full' });
         }
 
         // Update room list
@@ -188,8 +219,12 @@ io.on('connection', (socket) => {
             return;
         }
 
-        // Process the move (in a real app, you'd validate the move here)
-        const moveResult = processMove(room.gameState, from, to, promoteTo);
+        // Parse move coordinates
+        const fromPos = from === 'bank' ? from : JSON.parse(from);
+        const toPos = JSON.parse(to);
+
+        // Process the move
+        const moveResult = processMove(room.gameState, fromPos, toPos, promoteTo);
         if (!moveResult.valid) {
             socket.emit('error', moveResult.message || 'Invalid move');
             return;
@@ -198,8 +233,8 @@ io.on('connection', (socket) => {
         // Update game state with the new move
         room.gameState = moveResult.gameState;
         room.moveHistory.push({
-            from,
-            to,
+            from: fromPos,
+            to: toPos,
             piece: moveResult.piece,
             capturedPiece: moveResult.capturedPiece,
             isCheck: moveResult.isCheck,
@@ -277,7 +312,7 @@ io.on('connection', (socket) => {
     // Look for a game match
     socket.on('lookForGame', () => {
         // Check if player is already in a room
-        if (playersInRoom.has(userId)) {
+        if (players.has(userId)) {
             socket.emit('error', 'You are already in a game');
             return;
         }
@@ -308,63 +343,57 @@ io.on('connection', (socket) => {
         }
     });
 
+    // Handle reconnection
+    socket.on('reconnect', ({ userId, roomId }) => {
+        if (disconnectedPlayers.has(userId)) {
+            const disconnectData = disconnectedPlayers.get(userId);
+            if (Date.now() - disconnectData.timestamp <= RECONNECT_TIMEOUT) {
+                // Restore game state
+                if (gameStates.has(roomId)) {
+                    const gameState = gameStates.get(roomId);
+                    socket.join(roomId);
+                    socket.emit('gameStateRestored', gameState);
+                    io.to(roomId).emit('playerReconnected', { userId });
+                }
+                disconnectedPlayers.delete(userId);
+            }
+        }
+    });
+
     // Challenge another player
-    socket.on('challengePlayer', ({ challengedPlayerId, gameOptions }) => {
-        // Check if target player is connected
-        if (!connectedPlayers.has(challengedPlayerId)) {
+    socket.on('challenge:send', ({ challengedUserId }) => {
+        // Check if target player is connected and not in a game
+        if (!connectedPlayers.has(challengedUserId)) {
             socket.emit('error', 'Player is not online');
             return;
         }
 
-        const challengedPlayer = connectedPlayers.get(challengedPlayerId);
+        const challengedPlayer = connectedPlayers.get(challengedUserId);
+        if (players.has(challengedUserId)) {
+            socket.emit('error', 'Player is already in a game');
+            return;
+        }
 
         // Create a challenge
-        const challengeId = uuidv4();
-        const challenge = {
-            id: challengeId,
-            challenger: { ...player },
-            challenged: { ...challengedPlayer },
-            gameOptions,
-            timestamp: new Date()
-        };
-
-        // Store the challenge
-        playerChallenges.set(challengeId, challenge);
+        const challenge = createChallenge(player, challengedPlayer);
 
         // Notify the challenged player
         const challengedSocket = io.sockets.sockets.get(challengedPlayer.socketId);
         if (challengedSocket) {
-            challengedSocket.emit('gameChallenge', {
-                challengeId,
-                challenger: {
-                    id: player.id,
-                    username: player.username,
-                    displayName: player.displayName,
-                    avatarUrl: player.avatarUrl
-                },
-                gameOptions
-            });
+            challengedSocket.emit('challenge:received', challenge);
         }
 
-        // Notify the challenger that the challenge was sent
-        socket.emit('challengeSent', {
-            challengeId,
-            challenged: {
-                id: challengedPlayer.id,
-                username: challengedPlayer.username,
-                displayName: challengedPlayer.displayName
-            }
-        });
+        // Notify the challenger
+        socket.emit('challenge:sent', challenge);
     });
 
-    // Respond to a challenge
-    socket.on('respondToChallenge', ({ challengeId, accept }) => {
-        if (!playerChallenges.has(challengeId)) {
+    // Accept a challenge
+    socket.on('challenge:accept', ({ challengeId }) => {
+        const challenge = challenges.get(challengeId);
+        if (!challenge) {
             socket.emit('error', 'Challenge not found or expired');
             return;
         }
-
-        const challenge = playerChallenges.get(challengeId);
 
         // Validate the responding player is the challenged player
         if (challenge.challenged.id !== userId) {
@@ -372,82 +401,127 @@ io.on('connection', (socket) => {
             return;
         }
 
-        // Handle challenge response
-        if (accept) {
-            // Create a new game room
-            const roomId = uuidv4().substring(0, 8);
+        // Create a new game room
+        const roomId = uuidv4().substring(0, 8);
+        const gameRoom = {
+            roomId,
+            gameState: {
+                board: initializeBoard(),
+                currentPlayer: 'white',
+                moveHistory: [],
+                capturedPieces: { white: [], black: [] }
+            },
+            whitePlayer: { ...challenge.challenger, color: 'white' },
+            blackPlayer: { ...challenge.challenged, color: 'black' },
+            spectators: [],
+            whiteTime: 600, // Default 10 minutes
+            blackTime: 600,
+            isGameActive: true, // Set game as active immediately
+            winner: null,
+            moveHistory: []
+        };
 
-            // Initialize game state
-            const gameRoom = {
-                roomId,
-                gameState: {
-                    board: initializeBoard(),
-                    currentPlayer: 'white',
-                    moveHistory: [],
-                    capturedPieces: { white: [], black: [] }
-                },
-                whitePlayer: { ...challenge.challenger, color: 'white' },
-                blackPlayer: { ...challenge.challenged, color: 'black' },
-                spectators: [],
-                whiteTime: challenge.gameOptions?.timeLimit || 600,
-                blackTime: challenge.gameOptions?.timeLimit || 600,
-                isGameActive: false,
-                winner: null,
-                moveHistory: []
-            };
+        // Store room and track players
+        rooms.set(roomId, gameRoom);
+        players.set(challenge.challenger.id, roomId);
+        players.set(challenge.challenged.id, roomId);
 
-            // Store room and track players
-            rooms.set(roomId, gameRoom);
-            playersInRoom.set(challenge.challenger.id, roomId);
-            playersInRoom.set(challenge.challenged.id, roomId);
+        // Join socket rooms
+        socket.join(roomId);
+        const challengerSocket = io.sockets.sockets.get(challenge.challenger.socketId);
+        if (challengerSocket) {
+            challengerSocket.join(roomId);
+        }
 
-            // Join socket room
-            socket.join(roomId);
+        // Prepare game data for both players
+        const gameData = {
+            roomId,
+            whitePlayer: gameRoom.whitePlayer,
+            blackPlayer: gameRoom.blackPlayer,
+            gameState: gameRoom.gameState,
+            isGameActive: true
+        };
 
-            // Get challenger socket and add them to the room
-            const challengerSocket = io.sockets.sockets.get(challenge.challenger.socketId);
-            if (challengerSocket) {
-                challengerSocket.join(roomId);
+        // Emit game:directStart to both players to trigger immediate navigation
+        socket.emit('game:directStart', gameData);
+        if (challengerSocket) {
+            challengerSocket.emit('game:directStart', gameData);
+        }
 
-                // Notify challenger their challenge was accepted
-                challengerSocket.emit('challengeAccepted', {
-                    challengeId,
-                    roomId,
-                    opponent: {
-                        id: challenge.challenged.id,
-                        username: challenge.challenged.username,
-                        displayName: challenge.challenged.displayName,
-                        avatarUrl: challenge.challenged.avatarUrl
-                    }
-                });
-            }
-
-            // Notify the challenged player (responder)
-            socket.emit('roomJoined', gameRoom);
-
-            // Update room list for all users
-            updateRoomList();
-        } else {
-            // Challenge declined
-            // Notify the challenger
-            const challengerSocket = io.sockets.sockets.get(challenge.challenger.socketId);
-            if (challengerSocket) {
-                challengerSocket.emit('challengeDeclined', {
-                    challengeId,
-                    opponent: {
-                        id: challenge.challenged.id,
-                        username: challenge.challenged.username,
-                        displayName: challenge.challenged.displayName
-                    }
-                });
-            }
-
-            // Notify the responder
-            socket.emit('challengeResponseSent', { challengeId, accepted: false });
+        // Also emit roomJoined to ensure both players are properly connected
+        socket.emit('roomJoined', gameRoom);
+        if (challengerSocket) {
+            challengerSocket.emit('roomJoined', gameRoom);
         }
 
         // Remove the challenge
-        playerChallenges.delete(challengeId);
+        challenges.delete(challengeId);
+
+        // Remove from player challenges
+        const challengerChallenges = userChallenges.get(challenge.challenger.id);
+        const challengedChallenges = userChallenges.get(challenge.challenged.id);
+
+        if (challengerChallenges) {
+            challengerChallenges.delete(challengeId);
+        }
+        if (challengedChallenges) {
+            challengedChallenges.delete(challengeId);
+        }
+
+        // Update room list
+        updateRoomList();
+    });
+
+    // Decline a challenge
+    socket.on('challenge:decline', ({ challengeId }) => {
+        const challenge = challenges.get(challengeId);
+        if (!challenge) {
+            socket.emit('error', 'Challenge not found or expired');
+            return;
+        }
+
+        // Validate the responding player is the challenged player
+        if (challenge.challenged.id !== userId) {
+            socket.emit('error', 'This challenge is not for you');
+            return;
+        }
+
+        // Notify the challenger
+        const challengerSocket = io.sockets.sockets.get(challenge.challenger.socketId);
+        if (challengerSocket) {
+            challengerSocket.emit('challenge:declined', challenge);
+        }
+
+        // Remove the challenge
+        challenges.delete(challengeId);
+        userChallenges.get(challenge.challenger.id)?.delete(challengeId);
+        userChallenges.get(challenge.challenged.id)?.delete(challengeId);
+    });
+
+    // Cancel a challenge
+    socket.on('challenge:cancel', ({ challengeId }) => {
+        const challenge = challenges.get(challengeId);
+        if (!challenge) {
+            socket.emit('error', 'Challenge not found or expired');
+            return;
+        }
+
+        // Validate the cancelling player is the challenger
+        if (challenge.challenger.id !== userId) {
+            socket.emit('error', 'Only the challenger can cancel the challenge');
+            return;
+        }
+
+        // Notify the challenged player
+        const challengedSocket = io.sockets.sockets.get(challenge.challenged.socketId);
+        if (challengedSocket) {
+            challengedSocket.emit('challenge:cancelled', challenge);
+        }
+
+        // Remove the challenge
+        challenges.delete(challengeId);
+        userChallenges.get(challenge.challenger.id)?.delete(challengeId);
+        userChallenges.get(challenge.challenged.id)?.delete(challengeId);
     });
 
     // Chat messages
@@ -496,37 +570,23 @@ io.on('connection', (socket) => {
 
     // Handle disconnection
     socket.on('disconnect', () => {
-        console.log(`User disconnected: ${socket.id}`);
+        console.log(`User disconnected: ${username} (${userId})`);
 
-        // Update player's online status
-        if (connectedPlayers.has(userId)) {
-            const playerData = connectedPlayers.get(userId);
+        // Update player status
+        const playerData = connectedPlayers.get(userId);
+        if (playerData) {
             playerData.online = false;
             playerData.lastSeen = new Date();
-            connectedPlayers.set(userId, playerData);
-
-            // Broadcast updated player list
-            broadcastPlayerList();
         }
 
-        // Remove from looking for game queue
-        const queueIndex = playersLookingForGame.findIndex(p => p.id === userId);
-        if (queueIndex !== -1) {
-            playersLookingForGame.splice(queueIndex, 1);
-        }
-
-        // Find which room the user was in
-        const roomId = playersInRoom.get(userId);
+        // Handle player leaving their room
+        const roomId = players.get(userId);
         if (roomId) {
             handlePlayerLeaving(userId, roomId);
         }
 
-        // Clean up any pending challenges
-        playerChallenges.forEach((challenge, id) => {
-            if (challenge.challenger.id === userId || challenge.challenged.id === userId) {
-                playerChallenges.delete(id);
-            }
-        });
+        // Broadcast updated player list
+        broadcastPlayerList();
     });
 });
 
@@ -565,8 +625,8 @@ function matchWaitingPlayers() {
 
     // Store room and track players
     rooms.set(roomId, gameRoom);
-    playersInRoom.set(player1.id, roomId);
-    playersInRoom.set(player2.id, roomId);
+    players.set(player1.id, roomId);
+    players.set(player2.id, roomId);
 
     // Get player sockets
     const player1Socket = io.sockets.sockets.get(player1.socketId);
@@ -618,7 +678,7 @@ function findOpponentMatch(roomId) {
 
     // Add opponent as black player
     room.blackPlayer = { ...opponent, color: 'black' };
-    playersInRoom.set(opponent.id, roomId);
+    players.set(opponent.id, roomId);
 
     // Get opponent socket
     const opponentSocket = io.sockets.sockets.get(opponent.socketId);
@@ -674,31 +734,32 @@ function handlePlayerLeaving(userId, roomId) {
     if (!rooms.has(roomId)) return;
 
     const room = rooms.get(roomId);
+    const isDisconnected = disconnectedPlayers.has(userId);
 
-    // Check if user is a player or spectator
-    if (room.whitePlayer && room.whitePlayer.id === userId) {
-        // White player left
-        room.whitePlayer = null;
-        io.to(roomId).emit('playerLeft', userId);
-    } else if (room.blackPlayer && room.blackPlayer.id === userId) {
-        // Black player left
-        room.blackPlayer = null;
-        io.to(roomId).emit('playerLeft', userId);
-    } else {
-        // Remove from spectators
-        room.spectators = room.spectators.filter(s => s.id !== userId);
+    // If player is disconnected temporarily, don't remove them completely
+    if (!isDisconnected) {
+        if (room.whitePlayer && room.whitePlayer.id === userId) {
+            room.whitePlayer = null;
+            io.to(roomId).emit('playerLeft', { userId, color: 'white' });
+        } else if (room.blackPlayer && room.blackPlayer.id === userId) {
+            room.blackPlayer = null;
+            io.to(roomId).emit('playerLeft', { userId, color: 'black' });
+        } else {
+            room.spectators = room.spectators.filter(s => s.id !== userId);
+        }
+
+        players.delete(userId);
+
+        // Only remove room if both players are gone and not disconnected
+        if (!room.whitePlayer && !room.blackPlayer &&
+            !disconnectedPlayers.has(room.whitePlayer?.id) &&
+            !disconnectedPlayers.has(room.blackPlayer?.id)) {
+            rooms.delete(roomId);
+            gameStates.delete(roomId);
+        }
+
+        updateRoomList();
     }
-
-    // Clean up tracking
-    playersInRoom.delete(userId);
-
-    // If no players left, remove the room
-    if (!room.whitePlayer && !room.blackPlayer) {
-        rooms.delete(roomId);
-    }
-
-    // Update room list
-    updateRoomList();
 }
 
 // Start a game
@@ -744,15 +805,26 @@ function updateRoomList() {
     io.emit('roomList', getRoomList());
 }
 
-// Initialize chess board (placeholder function)
+// Initialize chess board
 function initializeBoard() {
-    // Return a basic initial chess state
-    // This would be replaced with your actual chess logic
+    // Create an 8x8 board
+    const board = Array(8).fill(null).map(() => Array(8).fill(null));
+
+    // Set up pawns
+    for (let i = 0; i < 8; i++) {
+        board[1][i] = { type: 'pawn', color: 'black' };
+        board[6][i] = { type: 'pawn', color: 'white' };
+    }
+
+    // Set up other pieces
+    const pieceOrder = ['rook', 'knight', 'bishop', 'queen', 'king', 'bishop', 'knight', 'rook'];
+    for (let i = 0; i < 8; i++) {
+        board[0][i] = { type: pieceOrder[i], color: 'black' };
+        board[7][i] = { type: pieceOrder[i], color: 'white' };
+    }
+
     return {
-        board: [
-            // Standard 8x8 board setup would go here
-            // This is just a placeholder
-        ],
+        board,
         currentPlayer: 'white',
         moveHistory: [],
         capturedPieces: { white: [], black: [] }
@@ -798,16 +870,119 @@ app.get('/health', (req, res) => {
 // Clear expired challenges every minute
 setInterval(() => {
     const now = new Date();
-    playerChallenges.forEach((challenge, id) => {
+    userChallenges.forEach((challenge, id) => {
         // Expire challenges after 5 minutes
         if (now - challenge.timestamp > 5 * 60 * 1000) {
-            playerChallenges.delete(id);
+            userChallenges.delete(id);
         }
     });
 }, 60000);
 
+// Add cleanup interval for inactive rooms
+setInterval(() => {
+    rooms.forEach((room, roomId) => {
+        const now = Date.now();
+        const lastActivity = room.lastActivity || now;
+
+        // Remove rooms inactive for more than 1 hour
+        if (now - lastActivity > 3600000 && !room.isGameActive) {
+            rooms.delete(roomId);
+            gameStates.delete(roomId);
+            updateRoomList();
+        }
+    });
+}, 300000); // Check every 5 minutes
+
+// Helper function to get player challenges
+function getPlayerChallenges(userId) {
+    const challengeIds = userChallenges.get(userId);
+    if (!challengeIds) return [];
+
+    return Array.from(challengeIds)
+        .map(id => challenges.get(id))
+        .filter(Boolean);
+}
+
+// Helper function to create a challenge
+function createChallenge(challenger, challenged) {
+    const challengeId = uuidv4();
+    const challenge = {
+        id: challengeId,
+        challenger: {
+            id: challenger.id,
+            username: challenger.username,
+            displayName: challenger.displayName,
+            avatarUrl: challenger.avatarUrl,
+            socketId: challenger.socketId
+        },
+        challenged: {
+            id: challenged.id,
+            username: challenged.username,
+            displayName: challenged.displayName,
+            avatarUrl: challenged.avatarUrl,
+            socketId: challenged.socketId
+        },
+        status: 'pending',
+        timestamp: Date.now()
+    };
+
+    // Store challenge
+    challenges.set(challengeId, challenge);
+
+    // Initialize Sets for both players if they don't exist
+    if (!userChallenges.has(challenger.id)) {
+        userChallenges.set(challenger.id, new Set());
+    }
+    if (!userChallenges.has(challenged.id)) {
+        userChallenges.set(challenged.id, new Set());
+    }
+
+    // Add challenge to both players' sets
+    userChallenges.get(challenger.id).add(challengeId);
+    userChallenges.get(challenged.id).add(challengeId);
+
+    // Set timeout for challenge expiration
+    setTimeout(() => {
+        if (challenges.has(challengeId) && challenges.get(challengeId).status === 'pending') {
+            handleChallengeExpired(challengeId);
+        }
+    }, CHALLENGE_TIMEOUT);
+
+    return challenge;
+}
+
+// Helper function to handle challenge expiration
+function handleChallengeExpired(challengeId) {
+    const challenge = challenges.get(challengeId);
+    if (!challenge) return;
+
+    // Remove challenge
+    challenges.delete(challengeId);
+
+    // Remove from player challenges
+    const challengerChallenges = userChallenges.get(challenge.challenger.id);
+    const challengedChallenges = userChallenges.get(challenge.challenged.id);
+
+    if (challengerChallenges) {
+        challengerChallenges.delete(challengeId);
+    }
+    if (challengedChallenges) {
+        challengedChallenges.delete(challengeId);
+    }
+
+    // Notify both players
+    const challengerSocket = io.sockets.sockets.get(challenge.challenger.socketId);
+    const challengedSocket = io.sockets.sockets.get(challenge.challenged.socketId);
+
+    if (challengerSocket) {
+        challengerSocket.emit('challenge:expired', challenge);
+    }
+    if (challengedSocket) {
+        challengedSocket.emit('challenge:expired', challenge);
+    }
+}
+
 // Start the server
-const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
 });

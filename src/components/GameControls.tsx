@@ -1,112 +1,142 @@
 import { FC } from 'react';
 import { Button } from '@/components/ui/button';
-import { GameState, PieceColor } from '@/lib/chess-models';
-import { RefreshCw, RotateCcw, Undo, ArrowDownUp, Cpu } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { useToast } from '@/components/ui/use-toast';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
+import { GameState, PieceColor } from '@/lib/chess-models';
 
-interface GameControlsProps {
+export interface GameControlsProps {
   gameState: GameState;
   onNewGame: () => void;
-  onFlipBoard: () => void;
-  onUndoMove?: () => void;
-  aiMode: boolean;
-  onToggleAI: (enabled: boolean) => void;
-  isThinking?: boolean;
-  className?: string;
+  onUndo: () => void;
+  onReset: () => void;
+  onDrawOffer: () => Promise<boolean>;
+  onResign: () => Promise<void>;
+  isGameActive: boolean;
+  isPlayerTurn: boolean;
+  canUndo: boolean;
+  isAIEnabled: boolean;
+  onToggleAI: () => void;
+  isThinking: boolean;
+  onReady?: () => void;
+  isReady?: boolean;
 }
 
 const GameControls: FC<GameControlsProps> = ({
   gameState,
   onNewGame,
-  onFlipBoard,
-  onUndoMove,
-  aiMode,
+  onUndo,
+  onReset,
+  onDrawOffer,
+  onResign,
+  isGameActive,
+  isPlayerTurn,
+  canUndo,
+  isAIEnabled,
   onToggleAI,
-  isThinking = false,
-  className
+  isThinking,
+  onReady,
+  isReady
 }) => {
   const { currentPlayer, isCheckmate, isStalemate } = gameState;
   const gameOver = isCheckmate || isStalemate;
+  const { toast } = useToast();
 
   const playerToMove = currentPlayer === PieceColor.WHITE ? 'White' : 'Black';
 
-  let statusText: string;
+  const handleDrawOffer = () => {
+    onDrawOffer();
+    toast({
+      title: "Đề nghị hòa",
+      description: "Đã gửi đề nghị hòa đến đối thủ",
+    });
+  };
 
-  if (isCheckmate) {
-    const winner = currentPlayer === PieceColor.WHITE ? 'Black' : 'White';
-    statusText = `Chiếu hết! ${winner} thắng`;
-  } else if (isStalemate) {
-    statusText = 'Hòa cờ! Trò chơi kết thúc';
-  } else {
-    statusText = `${playerToMove === 'White' ? 'Trắng' : 'Đen'} đi`;
-    if (aiMode && currentPlayer === PieceColor.BLACK && isThinking) {
-      statusText += ' (AI đang suy nghĩ...)';
-    }
-  }
+  const handleResign = () => {
+    onResign();
+    toast({
+      title: "Đầu hàng",
+      description: "Bạn đã đầu hàng",
+      variant: "destructive",
+    });
+  };
 
   return (
-    <div className={cn("space-y-4", className)}>
-      <div className="flex justify-between items-center">
-        <p className={cn(
-          "text-sm font-medium",
-          gameOver && "text-primary font-bold",
-          isThinking && "animate-pulse"
-        )}>
-          {statusText}
-        </p>
+    <div className="space-y-4">
+      <div className="space-y-2">
+        <h3 className="font-medium">Trạng thái</h3>
+        <div className="text-sm">
+          {gameOver ? (
+            <p className="text-red-500">
+              {isCheckmate ? 'Chiếu hết!' : 'Hòa cờ!'}
+            </p>
+          ) : (
+            <p>
+              Lượt đi: <span className="font-medium">{playerToMove}</span>
+              {isThinking && ' (AI đang suy nghĩ...)'}
+            </p>
+          )}
+        </div>
       </div>
 
-      <div className="flex flex-wrap gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          className="flex-1 bg-white text-black border-black"
-          onClick={onNewGame}
-        >
-          <RefreshCw className="w-4 h-4 mr-2" />
-          Trò chơi mới
-        </Button>
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <Label htmlFor="ai-mode">Chế độ AI</Label>
+          <Switch
+            id="ai-mode"
+            checked={isAIEnabled}
+            onCheckedChange={onToggleAI}
+            disabled={isThinking}
+          />
+        </div>
+      </div>
 
-        <Button
-          variant="outline"
-          size="sm"
-          className="flex-1 bg-white text-black border-black"
-          onClick={onFlipBoard}
-        >
-          <ArrowDownUp className="w-4 h-4 mr-2" />
-          Lật bàn cờ
-        </Button>
-
-        {onUndoMove && (
+      <div className="space-y-2">
+        <h3 className="font-medium">Điều khiển</h3>
+        <div className="grid grid-cols-2 gap-2">
           <Button
             variant="outline"
-            size="sm"
-            className="flex-1 bg-white text-black border-black disabled:bg-gray-200 disabled:text-gray-500"
-            onClick={onUndoMove}
-            disabled={gameState.moveHistory.length === 0 || isThinking}
+            onClick={onUndo}
+            disabled={!isGameActive || !isPlayerTurn || !canUndo}
           >
-            <Undo className="w-4 h-4 mr-2" />
             Đi lại
           </Button>
-        )}
-      </div>
-      <div className="flex items-center justify-between p-3 mt-2 bg-gradient-to-r from-blue-700/50 to-blue-900/50 rounded-lg border border-blue-700/50">
-        <div className="flex items-center">
-          <Cpu className="w-5 h-5 mr-2 text-blue-400" />
-          <Label htmlFor="ai-mode" className="font-bold text-blue-300">
-            Chơi với AI
-          </Label>
+          <Button
+            variant="outline"
+            onClick={onReset}
+            disabled={!isGameActive}
+          >
+            Chơi lại
+          </Button>
+          <Button
+            variant="outline"
+            onClick={handleDrawOffer}
+            disabled={!isGameActive || !isPlayerTurn}
+          >
+            Đề nghị hòa
+          </Button>
+          <Button
+            variant="destructive"
+            onClick={handleResign}
+            disabled={!isGameActive}
+          >
+            Đầu hàng
+          </Button>
         </div>
-
-        <Switch
-          id="ai-mode"
-          checked={aiMode}
-          onCheckedChange={onToggleAI}
-          disabled={isThinking}
-        />
       </div>
+
+      {onReady && (
+        <div className="space-y-2">
+          <Button
+            variant={isReady ? "default" : "outline"}
+            onClick={onReady}
+            className="w-full"
+            disabled={isThinking}
+          >
+            {isReady ? 'Hủy sẵn sàng' : 'Sẵn sàng'}
+          </Button>
+        </div>
+      )}
     </div>
   );
 };
