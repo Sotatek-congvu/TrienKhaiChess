@@ -295,59 +295,123 @@ export const useWebSocketGame = ({ roomId }: UseWebSocketGameProps = {}) => {
 
     // Make a move
     const makeMove = useCallback((from: Position, to: Position, promoteTo?: PieceType) => {
-        if (!socket || !room?.roomId || !isMyTurn) {
+        if (!socket || !room || !playerColor) {
+            console.error('Cannot make move: missing required data');
             return false;
         }
 
-        socket.emit('makeMove', {
-            roomId: room.roomId,
-            from,
-            to,
-            promoteTo
-        });
+        const move = {
+            from: {
+                row: from.row,
+                col: from.col
+            },
+            to: {
+                row: to.row,
+                col: to.col
+            },
+            piece: {
+                type: room.gameState.board[from.row][from.col]?.type,
+                color: room.gameState.board[from.row][from.col]?.color
+            },
+            promoteTo,
+            timestamp: Date.now()
+        };
 
-        return true;
-    }, [socket, room, isMyTurn]);
+        socket.emit('makeMove', {
+            gameId: room.roomId,
+            move,
+            playerColor
+        }, (response: any) => {
+            if (response.success) {
+                console.log('Move sent successfully');
+                return true;
+            } else {
+                console.error('Failed to make move:', response.error);
+                toast.error('Không thể thực hiện nước đi');
+                return false;
+            }
+        });
+    }, [socket, room, playerColor]);
 
     // Drop a piece from the piece bank
     const dropPiece = useCallback((pieceType: PieceType, position: Position) => {
-        if (!socket || !room?.roomId || !isMyTurn || !playerColor) {
+        if (!socket || !room || !playerColor) {
+            console.error('Cannot drop piece: missing required data');
             return false;
         }
 
-        socket.emit('dropPiece', {
-            roomId: room.roomId,
+        const move = {
             pieceType,
-            position,
-            color: playerColor
-        });
+            position: {
+                row: position.row,
+                col: position.col
+            },
+            color: playerColor,
+            isDropped: true,
+            timestamp: Date.now()
+        };
 
-        return true;
-    }, [socket, room, isMyTurn, playerColor]);
+        socket.emit('dropPiece', {
+            gameId: room.roomId,
+            move
+        }, (response: any) => {
+            if (response.success) {
+                console.log('Piece drop sent successfully');
+                return true;
+            } else {
+                console.error('Failed to drop piece:', response.error);
+                toast.error('Không thể thả quân cờ');
+                return false;
+            }
+        });
+    }, [socket, room, playerColor]);
 
     // Send a chat message
     const sendMessage = useCallback((content: string) => {
-        if (!socket || !room?.roomId || !content.trim()) {
+        if (!socket || !room || !user) {
+            console.error('Cannot send message: missing required data');
             return false;
         }
 
         socket.emit('sendMessage', {
-            roomId: room.roomId,
-            content: content.trim()
+            gameId: room.roomId,
+            message: content.trim(),
+            senderId: user.id,
+            timestamp: Date.now()
+        }, (response: any) => {
+            if (response.success) {
+                console.log('Message sent successfully');
+                return true;
+            } else {
+                console.error('Failed to send message:', response.error);
+                toast.error('Không thể gửi tin nhắn');
+                return false;
+            }
         });
-
-        return true;
-    }, [socket, room]);
+    }, [socket, room, user]);
 
     // Resign from the game
     const resignGame = useCallback(() => {
-        if (!socket || !room?.roomId || !playerColor) {
+        if (!socket || !room || !user) {
+            console.error('Cannot resign: missing required data');
             return false;
         }
 
-        socket.emit('resignGame', { roomId: room.roomId });
-        return true;
-    }, [socket, room, playerColor]);
+        socket.emit('resignGame', {
+            gameId: room.roomId,
+            playerId: user.id,
+            timestamp: Date.now()
+        }, (response: any) => {
+            if (response.success) {
+                console.log('Resignation sent successfully');
+                return true;
+            } else {
+                console.error('Failed to resign:', response.error);
+                toast.error('Không thể từ bỏ game');
+                return false;
+            }
+        });
+    }, [socket, room, user]);
 
     // Offer or respond to a draw
     const handleDraw = useCallback((offer: boolean, accept?: boolean) => {

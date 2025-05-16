@@ -2,7 +2,10 @@ import { useState, useRef, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useOnlineGame } from '@/hooks/use-online-game';
 import { useAuth } from '@/context/AuthContext';
-import { PieceColor, Position, GameState } from '@/lib/chess-models';
+import { useSocket } from '@/context/SocketContext';
+import { PieceColor, PieceType, Position, GameState, createInitialGameState } from '@/lib/chess-models';
+import { getValidMoves } from '@/lib/chess-logic';
+import { convertGameState } from '@/lib/convert-game-state';
 import ChessBoard from '@/components/ChessBoard';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -13,15 +16,15 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Skeleton } from '@/components/ui/skeleton';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Clock, MessageSquare, Flag, X, CopyIcon, HandshakeIcon, Loader2, Download, Maximize2, Minimize2 } from 'lucide-react';
+import { Clock, MessageSquare, Flag, X, CopyIcon, HandshakeIcon, Loader2, Download, Maximize2, Minimize2, Users } from 'lucide-react';
 import GameAnalysis from '@/components/GameAnalysis';
-import { useSocket } from '@/context/SocketContext';
 import GameInfo from '../GameInfo';
 import MoveHistory from '../MoveHistory';
 import GameControls from '../GameControls';
 import { cn } from '@/lib/utils';
 import { Textarea } from '@/components/ui/textarea';
 import { ChevronDown, ChevronUp } from 'lucide-react';
+import { motion } from 'framer-motion';
 
 interface Player {
     id: string;
@@ -31,9 +34,35 @@ interface Player {
     color: 'white' | 'black';
 }
 
+interface GameData {
+    gameId: string;
+    whitePlayer: {
+        id: string;
+        email: string;
+        username: string;
+        color: 'white';
+    };
+    blackPlayer: {
+        id: string;
+        email: string;
+        username: string;
+        color: 'black';
+    };
+    isGameActive: boolean;
+    winner: string | null;
+    moveHistory: any[];
+    playerColor: 'white' | 'black';
+    opponent: {
+        id: string;
+        email: string;
+        username: string;
+        color: 'white' | 'black';
+    };
+}
+
 interface GameRoom {
     roomId: string;
-    gameState: GameState;
+    gameState: any; // Sử dụng any để tránh lỗi khi server trả về định dạng khác
     whitePlayer: Player;
     blackPlayer: Player;
     spectators: any[];
@@ -42,291 +71,379 @@ interface GameRoom {
     isGameActive: boolean;
     winner: string | null;
     moveHistory: any[];
+    messages?: Array<{
+        senderId: string;
+        message: string;
+        timestamp: number;
+    }>;
+}
+
+interface LoadingState {
+    status: 'idle' | 'connecting' | 'loading' | 'ready' | 'error';
+    error: string | null;
 }
 
 export default function OnlineGame() {
     const { gameId } = useParams<{ gameId: string }>();
     const navigate = useNavigate();
     const { user } = useAuth();
+    const { socket } = useSocket();
     const [message, setMessage] = useState('');
-    const [showChatMobile, setShowChatMobile] = useState(false);
+    const [messages, setMessages] = useState<Array<{
+        senderId: string;
+        message: string;
+        timestamp: number;
+    }>>([]);
     const [showResignDialog, setShowResignDialog] = useState(false);
     const [showAnalysis, setShowAnalysis] = useState(false);
     const [analysisLoading, setAnalysisLoading] = useState(false);
     const [fullscreenAnalysis, setFullscreenAnalysis] = useState(false);
+    const [gameResult, setGameResult] = useState<string | null>(null);
+    const [isConnected, setIsConnected] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [gameDetails, setGameDetails] = useState<GameRoom | null>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
-    const { socket, isConnected } = useSocket();
-    const [isLoading, setIsLoading] = useState(true);
-    const hasJoinedRoom = useRef(false);
-    const mountedRef = useRef(true);
-    const joinRoomAttempted = useRef(false);
+    const [selectedPosition, setSelectedPosition] = useState<Position | null>(null);
+    const [validMoves, setValidMoves] = useState<Position[]>([]);
 
-    // Use useOnlineGame hook to connect to the game
-    const {
-        gameState,
-        playerColor,
-        opponent,
-        isMyTurn,
-        whiteTime,
-        blackTime,
-        messages,
-        gameResult,
-        isLoading: useOnlineGameLoading,
-        gameDetails,
-        makeMove: useOnlineGameMakeMove,
-        dropPiece,
-        sendMessage,
-        resignGame,
-        handleDraw
-    } = useOnlineGame({ gameId });
+    // Tạo gameState mẫu và state để quản lý nó
+    const [gameState, setGameState] = useState(createInitialGameState());
+    // Thêm state để quản lý việc đảo ngược góc nhìn
+    const [invertBoardView, setInvertBoardView] = useState(false);
 
-    // Effect to handle socket connection and room joining
+    // Kết nối socket khi component mount
     useEffect(() => {
-        let mounted = true;
+        if (!socket || !gameId) return;
 
-        const joinRoom = async () => {
-            if (!gameId || !socket || !isConnected) {
-                console.log('Waiting for socket connection...', { gameId, socket: !!socket, isConnected });
-                return;
+        // Kết nối vào phòng game với callback
+        socket.emit('joinGame', { gameId }, (response: { success: boolean; error?: string }) => {
+            if (response.success) {
+                setIsConnected(true);
+                setError(null);
+            } else {
+                setError(response.error || 'Không thể tham gia game');
+                setIsConnected(false);
+            }
+        });
+
+        // Lắng nghe khi tham gia game thành công
+        socket.on('gameJoined', (data: GameRoom) => {
+            console.log('Game joined, received data:', data);
+            setIsConnected(true);
+            setError(null);
+            setGameDetails(data);
+
+            // Nếu server gửi trạng thái game, sử dụng nó
+            if (data.gameState) {
+                console.log('Using server-provided game state');
+
+                // Sử dụng hàm chuyển đổi từ thư viện
+                const convertedGameState = convertGameState(data.gameState);
+
+                if (convertedGameState) {
+                    console.log('Game state converted successfully');
+                    setGameState(convertedGameState);
+                } else {
+                    console.error('Failed to convert game state from server');
+                    setGameState(createInitialGameState());
+                }
+
+                // Tự động xác định góc nhìn dựa trên vai trò người chơi
+                // Nếu người chơi là quân đen, mặc định đảo ngược góc nhìn để luôn có quân mình ở dưới
+                if (data.blackPlayer.id === user?.id) {
+                    console.log('User is playing as black, setting invertBoardView = false');
+                    setInvertBoardView(false);
+                } else if (data.whitePlayer.id === user?.id) {
+                    console.log('User is playing as white, setting invertBoardView = false');
+                    setInvertBoardView(false);
+                } else {
+                    // Nếu là người xem (spectator), mặc định góc nhìn là quân trắng ở dưới
+                    console.log('User is spectating, setting default view');
+                    setInvertBoardView(false);
+                }
+            } else {
+                // Nếu không, tạo trạng thái mặc định
+                console.log('Creating default game state');
+                setGameState(createInitialGameState());
             }
 
-            if (hasJoinedRoom.current || joinRoomAttempted.current) {
-                console.log('Already joined room or attempted to join');
-                return;
+            if (data.messages) {
+                setMessages(data.messages);
             }
+        });
 
-            try {
-                console.log('Joining game room:', gameId);
-                joinRoomAttempted.current = true;
+        // Lắng nghe sự kiện lỗi
+        socket.on('gameError', (error: string) => {
+            console.error('Game error:', error);
+            setError(error);
+            setIsConnected(false);
+        });
 
-                socket.emit('joinRoom', { roomId: gameId }, (response: any) => {
-                    if (!mounted) return;
+        // Lắng nghe sự kiện cập nhật game
+        socket.on('gameUpdate', (update: {
+            move?: { from: Position; to: Position };
+            gameState?: any;
+            isGameActive?: boolean;
+            winner?: string;
+        }) => {
+            console.log('Game update received:', update);
 
-                    if (response.success) {
-                        console.log('Successfully joined room');
-                        hasJoinedRoom.current = true;
-                        setIsLoading(false);
-                    } else {
-                        console.error('Failed to join room:', response.error);
-                        toast.error('Không thể tham gia phòng game');
-                        navigate('/lobby');
-                    }
-                });
-            } catch (error) {
-                console.error('Error joining room:', error);
-                if (mounted) {
-                    toast.error('Lỗi kết nối phòng game');
-                    navigate('/lobby');
+            // Nếu server trả về gameState đầy đủ, sử dụng nó thay vì tự cập nhật cục bộ
+            if (update.gameState) {
+                console.log('Cập nhật toàn bộ game state từ server');
+
+                // Sử dụng hàm chuyển đổi từ thư viện
+                const convertedState = convertGameState(update.gameState);
+
+                if (convertedState) {
+                    console.log('Game state converted successfully');
+                    setGameState(convertedState);
+                } else {
+                    console.error('Failed to convert game state from server');
                 }
             }
-        };
+            // Nếu chỉ có thông tin về nước đi, tự cập nhật gameState cục bộ
+            else if (update.move) {
+                console.log('Cập nhật nước đi từ server:', update.move);
+                // Cập nhật game state với nước đi mới
+                const newState = { ...gameState };
+                const { from, to } = update.move;
 
-        // Only attempt to join room if we have all required data
-        if (gameId && socket && isConnected && !hasJoinedRoom.current && !joinRoomAttempted.current) {
-            joinRoom();
-        }
+                // Di chuyển quân cờ
+                const piece = newState.board[from.row][from.col];
+                newState.board[from.row][from.col] = null;
+                newState.board[to.row][to.col] = piece;
 
-        return () => {
-            mounted = false;
-            if (socket && hasJoinedRoom.current) {
-                console.log('Leaving game room');
-                socket.emit('leaveRoom', { roomId: gameId });
-                hasJoinedRoom.current = false;
-                joinRoomAttempted.current = false;
+                // Cập nhật lượt chơi
+                newState.currentPlayer = newState.currentPlayer === PieceColor.WHITE ? PieceColor.BLACK : PieceColor.WHITE;
+
+                // Cập nhật lastMove
+                newState.lastMove = { from, to, piece };
+
+                // Thêm vào lịch sử
+                newState.moveHistory.push({ from, to, piece });
+
+                setGameState(newState);
+                toast.success('Nước đi đã được thực hiện');
             }
-        };
-    }, [gameId, socket, isConnected, navigate]);
 
-    // Debug logging
-    useEffect(() => {
-        if (!mountedRef.current) return;
+            if (update.isGameActive !== undefined) {
+                setGameDetails(prev => prev ? { ...prev, isGameActive: update.isGameActive! } : null);
+            }
 
-        console.log('Game state:', {
-            gameId,
-            isConnected,
-            isLoading,
-            useOnlineGameLoading,
-            hasGameState: !!gameState,
-            hasGameDetails: !!gameDetails,
-            playerColor,
-            opponent,
-            hasJoinedRoom: hasJoinedRoom.current,
-            joinRoomAttempted: joinRoomAttempted.current
+            if (update.winner) {
+                setGameDetails(prev => prev ? { ...prev, winner: update.winner! } : null);
+                toast.info(`Người chơi ${update.winner === gameDetails?.whitePlayer.id ? 'Trắng' : 'Đen'} đã thắng!`);
+            }
         });
-    }, [gameId, isConnected, isLoading, useOnlineGameLoading, gameState, gameDetails, playerColor, opponent]);
 
-    // Auto scroll messages
-    useEffect(() => {
-        if (messagesEndRef.current) {
-            messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
-        }
-    }, [messages]);
-
-    // Format time
-    const formatTime = (totalSeconds: number) => {
-        const minutes = Math.floor(totalSeconds / 60);
-        const seconds = totalSeconds % 60;
-        return `${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
-    };
-
-    // Handle piece move
-    const handleMove = (from: Position, to: Position) => {
-        if (!isMyTurn || !playerColor || !gameId) {
-            toast.error('Not your turn');
-            return;
-        }
-
-        const convertedFrom = { row: from.row, col: from.col };
-        const convertedTo = { row: to.row, col: to.col };
-
-        // Send move to server
-        useOnlineGameMakeMove(
-            convertedFrom,
-            convertedTo,
-            undefined // no promotion
-        );
-    };
-
-    // Wrapper function to convert GameState-based moves to Position-based moves
-    const handleGameStateMove = (newState: GameState) => {
-        if (!newState.lastMove) return;
-
-        if (newState.lastMove.isDropped) {
-            // Handle piece drop
-            if (newState.lastMove.piece && newState.lastMove.to) {
-                handlePieceDrop(newState.lastMove.piece.type, newState.lastMove.to);
-            }
-        } else {
-            // Handle regular move
-            handleMove(newState.lastMove.from, newState.lastMove.to);
-        }
-    };
-
-    // Handle piece drop from bank
-    const handlePieceDrop = (pieceType: any, position: Position) => {
-        if (!isMyTurn || !playerColor || !gameId) {
-            toast.error('Not your turn');
-            return;
-        }
-
-        // Send drop move to server
-        useOnlineGameMakeMove(
-            { row: -1, col: -1 }, // Special position to indicate bank move
-            position,
-            pieceType // promotion piece type for dropped piece
-        );
-    };
-
-    // Handle sending message
-    const handleSendMessage = (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!message.trim()) return;
-
-        sendMessage(message);
-        setMessage('');
-    };
-
-    // Handle copying game ID
-    const handleCopyGameId = () => {
-        if (gameId) {
-            navigator.clipboard.writeText(gameId);
-            toast.success('Game ID đã được sao chép');
-        }
-    };
-
-    // Handle resignation
-    const handleResign = async () => {
-        setShowResignDialog(false);
-        const success = await resignGame();
-        if (success) {
-            toast.info('You have resigned');
-        }
-    };
-
-    // Handle analysis view toggle
-    const handleToggleAnalysis = () => {
-        if (!showAnalysis) {
-            setAnalysisLoading(true);
-            // Simulate loading for analysis preparation
+        // Lắng nghe tin nhắn mới
+        socket.on('newMessage', (message: { senderId: string; message: string; timestamp: number }) => {
+            setMessages(prev => [...prev, message]);
             setTimeout(() => {
-                setAnalysisLoading(false);
-            }, 1000);
+                messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+            }, 100);
+        });
+
+        // Cleanup khi component unmount
+        return () => {
+            socket.off('gameJoined');
+            socket.off('gameError');
+            socket.off('gameUpdate');
+            socket.off('newMessage');
+            socket.emit('leaveGame', { gameId });
+        };
+    }, [socket, gameId, gameState, gameDetails, user]);
+
+    // Xử lý di chuyển quân cờ
+    const handleMove = (newState: GameState) => {
+        if (!socket || !gameId || !isConnected || !gameDetails) {
+            console.log("Không thể di chuyển quân cờ: socket, gameId, kết nối hoặc gameDetails không tồn tại", {
+                socketExists: !!socket,
+                gameIdExists: !!gameId,
+                isConnected,
+                gameDetailsExists: !!gameDetails
+            });
+            return;
         }
-        setShowAnalysis(!showAnalysis);
-    };
 
-    // Download game PGN
-    const handleDownloadPGN = () => {
-        try {
-            // Create a basic PGN format with game information
-            const date = new Date().toISOString().split('T')[0].replace(/-/g, '.');
-            const white = user?.user_metadata?.username || user?.email || 'White';
-            const black = opponent?.username || 'Black';
-            const result = gameResult ?
-                gameResult.includes('White') ? '1-0' :
-                    gameResult.includes('Black') ? '0-1' :
-                        '1/2-1/2' : '*';
+        // Lấy nước đi cuối cùng từ lịch sử
+        const lastMove = newState.lastMove;
+        if (!lastMove) {
+            console.log("Không thể di chuyển quân cờ: không có lastMove");
+            return;
+        }
 
-            // Create headers
-            let pgn = `[Event "Online Chess Game"]\n`;
-            pgn += `[Site "TinyChessVariant"]\n`;
-            pgn += `[Date "${date}"]\n`;
-            pgn += `[White "${playerColor === 'white' ? white : black}"]\n`;
-            pgn += `[Black "${playerColor === 'white' ? black : white}"]\n`;
-            pgn += `[Result "${result}"]\n`;
-            if (gameDetails?.variant) {
-                pgn += `[Variant "${gameDetails.variant}"]\n`;
+        // Kiểm tra lượt chơi
+        const isPlayerTurn = (gameDetails.whitePlayer.id === user?.id && gameState.currentPlayer === PieceColor.WHITE) ||
+            (gameDetails.blackPlayer.id === user?.id && gameState.currentPlayer === PieceColor.BLACK);
+
+        if (!isPlayerTurn) {
+            console.log("Không phải lượt của bạn", {
+                playerId: user?.id,
+                whitePlayerId: gameDetails.whitePlayer.id,
+                blackPlayerId: gameDetails.blackPlayer.id,
+                currentPlayer: gameState.currentPlayer,
+                playerColor: gameDetails.whitePlayer.id === user?.id ? "WHITE" : "BLACK"
+            });
+            toast.error('Chưa đến lượt của bạn');
+            return;
+        }
+
+        console.log("Gửi nước đi lên server:", {
+            gameId,
+            from: lastMove.from,
+            to: lastMove.to,
+            piece: lastMove.piece
+        });
+
+        // Gửi nước đi lên server với callback
+        socket.emit('makeMove', {
+            gameId,
+            move: {
+                from: lastMove.from,
+                to: lastMove.to
             }
-            pgn += `\n`;
+        }, (response: { success: boolean; error?: string }) => {
+            if (!response.success) {
+                console.log("Lỗi khi thực hiện nước đi:", response.error);
+                toast.error(response.error || 'Không thể thực hiện nước đi');
+                // Khôi phục lại game state cũ
+                setGameState(gameState);
+            } else {
+                console.log("Nước đi đã được server chấp nhận");
+                // Đối với người di chuyển, không cần cập nhật game state ngay lập tức
+                // Thay vào đó, chờ server gửi lại gameUpdate để đồng bộ
+            }
+        });
+    };    // Hàm xử lý khi chọn quân cờ
+    const handlePieceSelect = (position: Position) => {
+        console.log("OnlineGame - handlePieceSelect được gọi với position:", position);
 
-            // Add moves (simplified approach - would need proper move notation conversion)
-            const moveHistory = gameState.moveHistory.map((move, index) => {
-                const moveNumber = Math.floor(index / 2) + 1;
-                // Use type assertion to handle missing properties safely
-                const notation = (move as any).notation || `${move.from.row}${move.from.col}-${move.to.row}${move.to.col}`;
-                return index % 2 === 0 ? `${moveNumber}. ${notation}` : notation;
-            }).join(' ');
-
-            pgn += moveHistory + ` ${result}`;
-
-            // Create and download file
-            const blob = new Blob([pgn], { type: 'text/plain' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `game-${gameId}-${date}.pgn`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-
-            toast.success('Game PGN downloaded');
-        } catch (error) {
-            console.error('Failed to download PGN:', error);
-            toast.error('Failed to download game PGN');
+        if (!gameDetails?.isGameActive || !gameDetails) {
+            console.log("Không thể chọn quân cờ: game không hoạt động hoặc không có gameDetails");
+            return;
         }
+
+        const piece = gameState.board[position.row][position.col];
+        if (!piece) {
+            console.log("Không có quân cờ tại vị trí", position);
+            return;
+        }
+
+        // Kiểm tra xem quân cờ có thuộc về người chơi hiện tại không
+        const isPlayerPiece = (gameDetails.whitePlayer.id === user?.id && piece.color === PieceColor.WHITE) ||
+            (gameDetails.blackPlayer.id === user?.id && piece.color === PieceColor.BLACK);
+
+        if (!isPlayerPiece) {
+            console.log("Không thể di chuyển quân của đối thủ", {
+                playerId: user?.id,
+                pieceColor: piece.color,
+                whitePlayerId: gameDetails.whitePlayer.id,
+                blackPlayerId: gameDetails.blackPlayer.id
+            });
+            toast.error('Không thể di chuyển quân của đối thủ');
+            return;
+        }
+
+        // Kiểm tra lượt chơi
+        const isPlayerTurn = (gameDetails.whitePlayer.id === user?.id && gameState.currentPlayer === PieceColor.WHITE) ||
+            (gameDetails.blackPlayer.id === user?.id && gameState.currentPlayer === PieceColor.BLACK);
+
+        if (!isPlayerTurn) {
+            console.log("Chưa đến lượt của bạn", {
+                currentPlayer: gameState.currentPlayer,
+                playerColor: gameDetails.whitePlayer.id === user?.id ? "WHITE" : "BLACK"
+            });
+            toast.error('Chưa đến lượt của bạn');
+            return;
+        }
+
+        // Nếu mọi điều kiện đều thỏa mãn, thiết lập vị trí quân cờ đã chọn và tính toán các nước đi hợp lệ
+        setSelectedPosition(position);
+        const moves = getValidMoves(gameState, position);
+        setValidMoves(moves);
+        console.log('Valid moves:', moves);
+    };    // Hàm xử lý khi chọn ô đích
+    const handleSquareClick = (position: Position) => {
+        console.log("OnlineGame - handleSquareClick được gọi với position:", position);
+
+        // Nếu không có quân cờ được chọn, không làm gì cả
+        if (!selectedPosition) {
+            console.log("Không có quân cờ nào được chọn");
+
+            // Kiểm tra xem ô có quân cờ không và có phải là quân của người chơi hiện tại không
+            const piece = gameState.board[position.row][position.col];
+            if (piece) {
+                console.log("Có quân cờ tại vị trí này, cố gắng chọn quân:", piece);
+                // Thử chọn quân cờ này nếu có
+                handlePieceSelect(position);
+            }
+            return;
+        }
+
+        // Kiểm tra xem ô đích có nằm trong danh sách nước đi hợp lệ không
+        const isValidMove = validMoves.some(move =>
+            move.row === position.row && move.col === position.col
+        );
+
+        if (!isValidMove) {
+            console.log("Nước đi không hợp lệ, bỏ chọn quân cờ");
+            // Nếu không phải nước đi hợp lệ, bỏ chọn quân cờ
+            setSelectedPosition(null);
+            setValidMoves([]);
+            return;
+        }
+
+        // Kiểm tra lại lượt chơi trước khi di chuyển
+        if (!gameDetails) {
+            console.log("Không thể di chuyển: không có gameDetails");
+            return;
+        }
+
+        const isPlayerTurn = (gameDetails.whitePlayer.id === user?.id && gameState.currentPlayer === PieceColor.WHITE) ||
+            (gameDetails.blackPlayer.id === user?.id && gameState.currentPlayer === PieceColor.BLACK);
+
+        if (!isPlayerTurn) {
+            console.log("Không thể di chuyển: không phải lượt của bạn");
+            toast.error('Chưa đến lượt của bạn');
+            return;
+        }
+
+        console.log("Tạo gameState mới với nước đi từ", selectedPosition, "đến", position);
+
+        // Tạo game state mới với nước đi mới
+        const newState = { ...gameState };
+        const piece = newState.board[selectedPosition.row][selectedPosition.col];
+
+        // Di chuyển quân cờ
+        newState.board[selectedPosition.row][selectedPosition.col] = null;
+        newState.board[position.row][position.col] = piece;
+
+        // Cập nhật lastMove
+        newState.lastMove = {
+            from: selectedPosition,
+            to: position,
+            piece
+        };
+
+        // Cập nhật lượt chơi
+        newState.currentPlayer = newState.currentPlayer === PieceColor.WHITE ? PieceColor.BLACK : PieceColor.WHITE;
+
+        // Thêm vào lịch sử
+        newState.moveHistory.push({
+            from: selectedPosition,
+            to: position,
+            piece
+        });
+
+        // Reset selected piece và valid moves
+        setSelectedPosition(null);
+        setValidMoves([]);
+
+        // Gửi nước đi lên server
+        handleMove(newState);
     };
-
-    // Show loading state while connecting
-    if (!isConnected || isLoading || useOnlineGameLoading) {
-        return (
-            <div className="flex flex-col items-center justify-center min-h-screen bg-[#312e2b] text-white">
-                <div className="w-8 h-8 border-t-2 border-l-2 border-blue-500 rounded-full animate-spin mb-4"></div>
-                <p>Đang kết nối với máy chủ game...</p>
-            </div>
-        );
-    }
-
-    // Show error state if game data is not available
-    if (!gameState || !gameDetails) {
-        console.log('Game data not available:', { gameState, gameDetails });
-        return (
-            <div className="flex flex-col items-center justify-center min-h-screen bg-[#312e2b] text-white">
-                <p className="text-red-500 mb-4">Không thể tải game</p>
-                <Button onClick={() => navigate('/lobby')}>Quay lại Lobby</Button>
-            </div>
-        );
-    }
 
     const handleKeyPress = (e: React.KeyboardEvent) => {
         if (e.key === 'Enter' && !e.shiftKey) {
@@ -335,294 +452,284 @@ export default function OnlineGame() {
         }
     };
 
-    return (
-        <div className="container mx-auto py-4 max-w-6xl">
-            <div className="flex flex-col lg:flex-row gap-6">
-                {/* Left column - Chess Board */}
-                <div className="w-full lg:w-2/3">
-                    {/* Game Header */}
-                    <div className="flex justify-between items-center mb-4">
-                        <div>
-                            <h2 className="text-2xl font-bold">Online Game</h2>
-                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                                <span>ID: {gameId?.substring(0, 8)}...</span>
-                                <button
-                                    className="hover:text-primary"
-                                    onClick={handleCopyGameId}
-                                    title="Copy Game ID"
-                                >
-                                    <CopyIcon className="h-4 w-4" />
-                                </button>
-                            </div>
-                        </div>
+    const handleSendMessage = (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!message.trim() || !socket || !gameId || !isConnected) return;
 
-                        {/* Game Actions */}
-                        <div className="flex gap-2">
+        const newMessage = {
+            senderId: user?.id || '1',
+            message: message.trim(),
+            timestamp: Date.now()
+        };
+
+        socket.emit('sendMessage', { gameId, message: newMessage });
+        setMessage('');
+    };
+
+    const handleResign = () => {
+        if (!socket || !gameId || !isConnected) return;
+        socket.emit('resignGame', { gameId });
+        setShowResignDialog(false);
+    };
+
+    // Hiển thị thông báo lỗi nếu có
+    if (error) {
+        return (
+            <div className="min-h-screen bg-[#312e2b] text-white p-4">
+                <div className="max-w-5xl mx-auto">
+                    <Card className="bg-red-50 border-red-200">
+                        <CardHeader>
+                            <CardTitle className="text-red-900">Lỗi kết nối</CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                            <p className="text-red-700">{error}</p>
+                            <div className="mt-4 flex gap-2">
+                                <Button onClick={() => window.location.reload()}>
+                                    Thử lại
+                                </Button>
+                                <Button variant="outline" onClick={() => navigate('/lobby')}>
+                                    Quay lại Lobby
+                                </Button>
+                            </div>
+                        </CardContent>
+                    </Card>
+                </div>
+            </div>
+        );
+    }
+
+    // Hiển thị loading khi đang kết nối
+    if (!isConnected) {
+        return (
+            <div className="min-h-screen bg-[#312e2b] text-white p-4">
+                <div className="max-w-5xl mx-auto">
+                    <Card className="bg-[#272522] border-gray-700">
+                        <CardHeader>
+                            <CardTitle>Đang kết nối...</CardTitle>
+                        </CardHeader>
+                        <CardContent className="flex items-center justify-center">
+                            <Loader2 className="h-8 w-8 animate-spin" />
+                        </CardContent>
+                    </Card>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="min-h-screen bg-[#312e2b] text-white p-4">
+            <div className="max-w-5xl mx-auto">
+                <motion.header
+                    className="mb-6 relative flex flex-wrap items-center justify-between gap-4"
+                    initial={{ opacity: 0, y: -20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.5 }}
+                >
+                    <div className="flex flex-col items-start">
+                        <h1 className="text-2xl md:text-3xl font-bold text-white">
+                            Chessmihouse 6×6
+                        </h1>
+                        <p className="text-gray-400 text-sm">
+                            Cờ vua 6x6 với luật Crazyhouse - thả quân đã bắt
+                        </p>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                        {user && (
+                            <div className="text-sm mr-1 hidden md:flex items-center gap-1">
+                                <span className="text-gray-400">Xin chào,</span>
+                                <span className="font-medium text-white">{user.user_metadata?.username || user.email}</span>
+                            </div>
+                        )}
+
+                        <div className="flex items-center gap-1">
                             <Button
-                                variant="outline"
+                                variant="secondary"
                                 size="sm"
-                                className="hidden md:flex"
-                                onClick={() => handleDraw()}
-                                disabled={!!gameResult || !gameDetails?.status || gameDetails.status !== 'active'}
-                                title="Offer/Accept Draw"
+                                className="flex items-center gap-1"
+                                onClick={() => navigate('/lobby')}
                             >
-                                <HandshakeIcon className="h-4 w-4 mr-2" />
-                                {gameDetails?.draw_offered_by && gameDetails.draw_offered_by !== user?.id
-                                    ? 'Accept Draw'
-                                    : 'Offer Draw'}
+                                <Users size={16} />
+                                <span className="hidden sm:inline">Quay lại Lobby</span>
                             </Button>
 
                             <Button
                                 variant="destructive"
                                 size="sm"
-                                className="hidden md:flex"
+                                className="flex items-center gap-1"
                                 onClick={() => setShowResignDialog(true)}
-                                disabled={!!gameResult || !gameDetails?.status || gameDetails.status !== 'active'}
                             >
-                                <Flag className="h-4 w-4 mr-2" />
-                                Resign
-                            </Button>
-
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => navigate('/lobby')}
-                            >
-                                Back to Lobby
+                                <Flag size={16} />
+                                <span className="hidden sm:inline">Đầu hàng</span>
                             </Button>
                         </div>
                     </div>
+                </motion.header>
 
-                    {/* Chess board section */}
-                    <div className="relative mb-4">
-                        {/* Opponent info */}
-                        <div className="flex items-center justify-between mb-2 p-2 bg-secondary/30 rounded-md">
-                            <div className="flex items-center gap-2">
-                                <Avatar>
-                                    <AvatarImage src={opponent?.avatar_url || ''} />
-                                    <AvatarFallback>{opponent?.username?.substring(0, 2) || '??'}</AvatarFallback>
-                                </Avatar>
-                                <div>
-                                    <p className="font-medium">{opponent?.username || 'Waiting for opponent...'}</p>
-                                    {gameDetails?.variant && (
-                                        <Badge variant="outline" className="text-xs">
-                                            {gameDetails.variant}
-                                        </Badge>
-                                    )}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">                    <motion.div
+                    className="lg:col-span-2"
+                    initial={{ opacity: 0, scale: 0.95 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ duration: 0.5, delay: 0.1 }}
+                >
+                    {/* Player thông tin phía trên - hiển thị đối thủ */}
+                    <div className="mb-4 flex items-center justify-between bg-[#272522] p-4 rounded-lg border border-gray-700">
+                        <div className="flex items-center gap-3">
+                            <Avatar className="h-10 w-10 border border-gray-600">
+                                <AvatarImage
+                                    src={gameDetails?.whitePlayer.id === user?.id
+                                        ? gameDetails?.blackPlayer.avatarUrl
+                                        : gameDetails?.whitePlayer.avatarUrl}
+                                    alt={gameDetails?.whitePlayer.id === user?.id
+                                        ? gameDetails?.blackPlayer.displayName
+                                        : gameDetails?.whitePlayer.displayName}
+                                />
+                                <AvatarFallback>
+                                    {(gameDetails?.whitePlayer.id === user?.id
+                                        ? gameDetails?.blackPlayer.displayName
+                                        : gameDetails?.whitePlayer.displayName)?.substring(0, 2).toUpperCase()}
+                                </AvatarFallback>
+                            </Avatar>
+                            <div>
+                                <div className="font-medium">
+                                    {gameDetails?.whitePlayer.id === user?.id
+                                        ? gameDetails?.blackPlayer.displayName
+                                        : gameDetails?.whitePlayer.displayName}
+                                </div>
+                                <div className="text-sm text-gray-400">
+                                    {gameDetails?.whitePlayer.id === user?.id ? "Quân đen" : "Quân trắng"}
                                 </div>
                             </div>
-                            <div className="flex items-center gap-2">
-                                <Clock className="h-4 w-4" />
-                                <span className="font-mono">
-                                    {formatTime(playerColor === 'white' ? blackTime : whiteTime)}
-                                </span>
-                            </div>
                         </div>
-
-                        {/* Chess board */}
-                        <div className="aspect-square">
-                            <ChessBoard
-                                gameState={gameState}
-                                perspective={playerColor === 'white' ? PieceColor.WHITE : PieceColor.BLACK}
-                                onMove={handleGameStateMove}
-                                disabled={!isMyTurn}
-                                showCoordinates={true}
-                            />
-                        </div>
-
-                        {/* Current player info */}
-                        <div className="flex items-center justify-between mt-2 p-2 bg-secondary/30 rounded-md">
-                            <div className="flex items-center gap-2">
-                                <Avatar>
-                                    <AvatarImage src={user?.user_metadata?.avatar_url || ''} />
-                                    <AvatarFallback>{user?.email?.substring(0, 2) || 'ME'}</AvatarFallback>
-                                </Avatar>
-                                <div>
-                                    <p className="font-medium">{user?.user_metadata?.username || user?.email}</p>
-                                    <Badge variant={isMyTurn ? "default" : "outline"} className="text-xs">
-                                        {playerColor === 'white' ? 'White' : 'Black'}
-                                    </Badge>
+                        <div className="text-2xl font-bold text-gray-300">
+                            {gameDetails?.whitePlayer.id === user?.id ? gameDetails?.blackTime : gameDetails?.whiteTime}
+                        </div>                    </div><ChessBoard
+                        gameState={gameState}
+                        onMove={(newState) => handleMove(newState)}
+                        // Đặt góc nhìn để người chơi luôn thấy quân của mình ở dưới
+                        // Nếu người chơi là quân trắng, góc nhìn là WHITE (quân trắng ở dưới)
+                        // Nếu người chơi là quân đen, góc nhìn là BLACK (quân đen ở dưới)
+                        perspective={gameDetails?.whitePlayer.id === user?.id ? PieceColor.WHITE : PieceColor.BLACK}
+                        disabled={!isConnected || !gameDetails?.isGameActive ||
+                            // Kiểm tra lượt chơi - chỉ cho phép di chuyển khi đến lượt người chơi
+                            !((gameDetails?.whitePlayer.id === user?.id && gameState.currentPlayer === PieceColor.WHITE) ||
+                                (gameDetails?.blackPlayer.id === user?.id && gameState.currentPlayer === PieceColor.BLACK))}
+                        showCoordinates={true}
+                        onPieceSelect={handlePieceSelect}
+                        onSquareClick={handleSquareClick}
+                    />{/* Player thông tin phía dưới - hiển thị người chơi hiện tại */}
+                    <div className="mt-4 flex items-center justify-between bg-[#272522] p-4 rounded-lg border border-gray-700">
+                        <div className="flex items-center gap-3">
+                            <Avatar className="h-10 w-10 border border-gray-600">
+                                <AvatarImage
+                                    src={gameDetails?.whitePlayer.id === user?.id
+                                        ? gameDetails?.whitePlayer.avatarUrl
+                                        : gameDetails?.blackPlayer.avatarUrl}
+                                    alt={gameDetails?.whitePlayer.id === user?.id
+                                        ? gameDetails?.whitePlayer.displayName
+                                        : gameDetails?.blackPlayer.displayName}
+                                />
+                                <AvatarFallback>
+                                    {(gameDetails?.whitePlayer.id === user?.id
+                                        ? gameDetails?.whitePlayer.displayName
+                                        : gameDetails?.blackPlayer.displayName)?.substring(0, 2).toUpperCase()}
+                                </AvatarFallback>
+                            </Avatar>
+                            <div>
+                                <div className="font-medium">
+                                    {gameDetails?.whitePlayer.id === user?.id
+                                        ? gameDetails?.whitePlayer.displayName
+                                        : gameDetails?.blackPlayer.displayName}
+                                </div>                                <div className="text-sm text-gray-400">
+                                    {gameDetails?.whitePlayer.id === user?.id ? "Quân trắng" : "Quân đen"}
                                 </div>
                             </div>
-                            <div className="flex items-center gap-2">
-                                <Clock className="h-4 w-4" />
-                                <span className="font-mono">
-                                    {formatTime(playerColor === 'white' ? whiteTime : blackTime)}
-                                </span>
-                            </div>
                         </div>
-
-                        {/* Game result overlay */}
-                        {gameResult && (
-                            <div className="absolute inset-0 bg-background/80 flex items-center justify-center backdrop-blur-sm rounded-lg">
-                                <Card className="w-80">
-                                    <CardHeader>
-                                        <CardTitle>Game Over</CardTitle>
-                                    </CardHeader>
-                                    <CardContent>
-                                        <p className="text-lg font-bold text-center mb-2">{gameResult}</p>
-                                        <div className="flex justify-center mt-4">
-                                            <Button onClick={() => navigate('/lobby')}>
-                                                Back to Lobby
-                                            </Button>
-                                        </div>
-                                    </CardContent>
-                                </Card>
-                            </div>
-                        )}
+                        <div className="text-2xl font-bold text-gray-300">
+                            {gameDetails?.whitePlayer.id === user?.id ? gameDetails?.whiteTime : gameDetails?.blackTime}
+                        </div>
                     </div>
+                </motion.div>
 
-                    {/* Mobile game controls */}
-                    <div className="flex md:hidden gap-2 mb-4">
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            className="flex-1"
-                            onClick={() => setShowChatMobile(!showChatMobile)}
-                        >
-                            <MessageSquare className="h-4 w-4 mr-2" />
-                            Chat
-                        </Button>
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            className="flex-1"
-                            onClick={() => handleDraw()}
-                            disabled={!!gameResult || !gameDetails?.status || gameDetails.status !== 'active'}
-                        >
-                            <HandshakeIcon className="h-4 w-4 mr-2" />
-                            Draw
-                        </Button>
-                        <Button
-                            variant="destructive"
-                            size="sm"
-                            className="flex-1"
-                            onClick={() => setShowResignDialog(true)}
-                            disabled={!!gameResult || !gameDetails?.status || gameDetails.status !== 'active'}
-                        >
-                            <Flag className="h-4 w-4 mr-2" />
-                            Resign
-                        </Button>
-                    </div>
+                    <motion.div
+                        className="space-y-4"
+                        initial={{ opacity: 0, x: 20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ duration: 0.5, delay: 0.2 }}
+                    >
+                        <GameControls
+                            gameState={gameState}
+                            onNewGame={() => setGameState(createInitialGameState())}
+                            onUndo={() => { }}
+                            onReset={() => setGameState(createInitialGameState())}
+                            onDrawOffer={async () => true}
+                            onResign={async () => { }}
+                            isGameActive={true}
+                            isPlayerTurn={true}
+                            canUndo={false}
+                            isAIEnabled={false}
+                            onToggleAI={() => { }}
+                            isThinking={false}
+                        />
 
-                    {/* Game result and analysis */}
-                    {gameResult && (
-                        <Card className="mt-6">
-                            <CardHeader>
-                                <CardTitle>Game Finished: {gameResult}</CardTitle>
+                        <GameInfo
+                            whitePlayer={gameDetails?.whitePlayer}
+                            blackPlayer={gameDetails?.blackPlayer}
+                            currentPlayer={gameState.currentPlayer}
+                            whiteTime={gameDetails?.whiteTime}
+                            blackTime={gameDetails?.blackTime}
+                            isGameActive={gameDetails?.isGameActive}
+                            winner={null}
+                        />
+
+                        <MoveHistory gameState={gameState} />
+
+                        {/* Chat Section */}
+                        <Card className="bg-white border-gray-200">
+                            <CardHeader className="pb-2">
+                                <CardTitle className="text-gray-900">Game Chat</CardTitle>
                             </CardHeader>
                             <CardContent>
-                                <p className="mb-4">This game has ended. You can review the moves or analyze the game.</p>
-                                <div className="flex flex-wrap gap-3">
-                                    <Button
-                                        variant="outline"
-                                        onClick={handleToggleAnalysis}
-                                        disabled={analysisLoading}
-                                    >
-                                        {analysisLoading ? (
-                                            <>
-                                                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                                                Loading Analysis...
-                                            </>
-                                        ) : (
-                                            showAnalysis ? 'Hide Analysis' : 'Show Analysis'
-                                        )}
-                                    </Button>
-                                    <Button
-                                        variant="outline"
-                                        onClick={handleDownloadPGN}
-                                    >
-                                        <Download className="h-4 w-4 mr-2" />
-                                        Download PGN
-                                    </Button>
-                                    <Button onClick={() => navigate('/lobby')}>
-                                        Back to Lobby
-                                    </Button>
-                                </div>
-
-                                {showAnalysis && !analysisLoading && (
-                                    <div className="mt-4">
-                                        <div className="flex justify-end mb-2">
-                                            <Button
-                                                variant="ghost"
-                                                size="sm"
-                                                onClick={() => setFullscreenAnalysis(!fullscreenAnalysis)}
-                                            >
-                                                {fullscreenAnalysis ? (
-                                                    <Minimize2 className="h-4 w-4" />
-                                                ) : (
-                                                    <Maximize2 className="h-4 w-4" />
-                                                )}
-                                            </Button>
-                                        </div>
-                                        <GameAnalysis
-                                            gameState={gameState}
-                                            moveHistory={gameState.moveHistory.map(move => ({
-                                                from: move.from,
-                                                to: move.to,
-                                                notation: move.notation || `${move.from.row}${move.from.col}-${move.to.row}${move.to.col}`
-                                            }))}
-                                            playerColor={playerColor === 'white' ? PieceColor.WHITE : PieceColor.BLACK}
-                                        />
+                                <ScrollArea className="h-[200px] mb-4">
+                                    <div className="space-y-4 pr-4">
+                                        {messages.map((msg, index) => (
+                                            <div key={index} className={`flex ${msg.senderId === user?.id ? 'justify-end' : ''}`}>
+                                                <div className={`max-w-[80%] p-3 rounded-lg ${msg.senderId === user?.id
+                                                    ? 'bg-blue-600 text-white'
+                                                    : 'bg-gray-100 text-gray-900'
+                                                    }`}>
+                                                    <div className="text-xs font-medium mb-1">
+                                                        {msg.senderId === user?.id ? 'Bạn' : 'Đối thủ'}
+                                                    </div>
+                                                    <p className="break-words">{msg.message}</p>
+                                                    <div className="text-xs opacity-70 mt-1">
+                                                        {new Date(msg.timestamp).toLocaleTimeString()}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                        <div ref={messagesEndRef} />
                                     </div>
-                                )}
+                                </ScrollArea>
+                                <form onSubmit={handleSendMessage} className="flex gap-2">
+                                    <Textarea
+                                        value={message}
+                                        onChange={(e) => setMessage(e.target.value)}
+                                        placeholder="Nhập tin nhắn..."
+                                        onKeyDown={handleKeyPress}
+                                        className="min-h-[80px] bg-gray-50 border-gray-200 text-gray-900"
+                                    />
+                                    <Button
+                                        type="submit"
+                                        disabled={!message.trim()}
+                                        className="self-end"
+                                    >
+                                        Gửi
+                                    </Button>
+                                </form>
                             </CardContent>
                         </Card>
-                    )}
-                </div>
-
-                {/* Right column - Chat & Game Info */}
-                <div className={`w-full lg:w-1/3 ${showChatMobile ? '' : 'hidden md:block'}`}>
-                    <Card className="h-full">
-                        <CardHeader className="pb-2">
-                            <div className="flex justify-between items-center">
-                                <CardTitle>Game Chat</CardTitle>
-                                <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    className="md:hidden"
-                                    onClick={() => setShowChatMobile(false)}
-                                >
-                                    {showChatMobile ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
-                                </Button>
-                            </div>
-                        </CardHeader>
-                        <CardContent className={cn("flex flex-col h-[calc(100%-4rem)]", showChatMobile ? "block" : "hidden md:block")}>
-                            <ScrollArea className="flex-1 mb-4">
-                                <div className="space-y-4 pr-4">
-                                    {messages.map((msg, index) => (
-                                        <div key={index} className={`flex ${msg.senderId === user?.id ? 'justify-end' : ''}`}>
-                                            <div className={`max-w-[80%] p-3 rounded-lg ${msg.senderId === user?.id
-                                                ? 'bg-primary text-primary-foreground'
-                                                : 'bg-muted'
-                                                }`}>
-                                                <div className="text-xs font-medium mb-1">
-                                                    {msg.senderId === user?.id
-                                                        ? 'You'
-                                                        : opponent?.username || 'Opponent'}
-                                                </div>
-                                                <p>{msg.message}</p>
-                                            </div>
-                                        </div>
-                                    ))}
-                                    <div ref={messagesEndRef} />
-                                </div>
-                            </ScrollArea>
-                            <form onSubmit={handleSendMessage} className="flex gap-2">
-                                <Textarea
-                                    value={message}
-                                    onChange={(e) => setMessage(e.target.value)}
-                                    placeholder="Type a message..."
-                                    onKeyDown={handleKeyPress}
-                                    disabled={!!gameResult}
-                                    className="min-h-[80px]"
-                                />
-                                <Button type="submit" disabled={!message.trim() || !!gameResult}>
-                                    Send
-                                </Button>
-                            </form>
-                        </CardContent>
-                    </Card>
+                    </motion.div>
                 </div>
             </div>
 
@@ -630,75 +737,21 @@ export default function OnlineGame() {
             <Dialog open={showResignDialog} onOpenChange={setShowResignDialog}>
                 <DialogContent>
                     <DialogHeader>
-                        <DialogTitle>Resign Game</DialogTitle>
+                        <DialogTitle>Đầu hàng</DialogTitle>
                         <DialogDescription>
-                            Are you sure you want to resign? This action cannot be undone.
+                            Bạn có chắc chắn muốn đầu hàng? Hành động này không thể hoàn tác.
                         </DialogDescription>
                     </DialogHeader>
                     <DialogFooter>
                         <Button variant="outline" onClick={() => setShowResignDialog(false)}>
-                            Cancel
+                            Hủy
                         </Button>
                         <Button variant="destructive" onClick={handleResign}>
-                            Resign
+                            Đầu hàng
                         </Button>
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
-
-            {/* Fullscreen analysis dialog */}
-            <Dialog open={fullscreenAnalysis} onOpenChange={setFullscreenAnalysis}>
-                <DialogContent className="max-w-4xl h-[90vh]">
-                    <DialogHeader>
-                        <DialogTitle>Game Analysis</DialogTitle>
-                        <DialogDescription>
-                            Analyze your game with Stockfish engine evaluation
-                        </DialogDescription>
-                    </DialogHeader>
-                    <div className="flex-1 overflow-auto py-2">
-                        <GameAnalysis
-                            gameState={gameState}
-                            moveHistory={gameState.moveHistory.map(move => ({
-                                from: move.from,
-                                to: move.to,
-                                notation: move.notation || `${move.from.row}${move.from.col}-${move.to.row}${move.to.col}`
-                            }))}
-                            playerColor={playerColor === 'white' ? PieceColor.WHITE : PieceColor.BLACK}
-                        />
-                    </div>
-                    <DialogFooter>
-                        <Button onClick={() => setFullscreenAnalysis(false)}>Close</Button>
-                    </DialogFooter>
-                </DialogContent>
-            </Dialog>
-
-            <div className="space-y-4">
-                <GameInfo
-                    whitePlayer={gameDetails.whitePlayer}
-                    blackPlayer={gameDetails.blackPlayer}
-                    currentPlayer={gameState.currentPlayer}
-                    whiteTime={gameDetails.whiteTime}
-                    blackTime={gameDetails.blackTime}
-                    isGameActive={gameDetails.isGameActive}
-                    winner={gameResult}
-                />
-                <MoveHistory gameState={gameState} />
-                <GameControls
-                    gameState={gameState}
-                    onNewGame={() => {/* Implement new game logic */ }}
-                    onUndo={() => {/* Implement undo logic */ }}
-                    onReset={() => {/* Implement reset logic */ }}
-                    onDrawOffer={handleDraw}
-                    onResign={handleResign}
-                    isGameActive={gameDetails.isGameActive}
-                    isPlayerTurn={isMyTurn}
-                    canUndo={false}
-                    isAIEnabled={false}
-                    onToggleAI={() => {/* No AI in online games */ }}
-                    isThinking={false}
-                    onReady={() => {/* Implement ready logic */ }}
-                />
-            </div>
         </div>
     );
 }

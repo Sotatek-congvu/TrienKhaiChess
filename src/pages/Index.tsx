@@ -24,7 +24,7 @@ const Index = () => {
   const [gameState, setGameState] = useState<GameState>(createInitialGameState());
   const [boardPerspective, setBoardPerspective] = useState<PieceColor>(PieceColor.WHITE);
   const [gameStateHistory, setGameStateHistory] = useState<GameState[]>([createInitialGameState()]);
-  const [showRules, setShowRules] = useState<boolean>(true);
+  const [showRules, setShowRules] = useState<boolean>(false);
   const [playAgainstAI, setPlayAgainstAI] = useState<boolean>(true); // Mặc định bật AI
   const [isLoggingOut, setIsLoggingOut] = useState(false);
 
@@ -72,14 +72,13 @@ const Index = () => {
 
   // Kích hoạt AI khi trang được khởi tạo
   useEffect(() => {
-    // Nếu lượt hiện tại là của AI (đen), cho AI đi
     if (playAgainstAI && gameState.currentPlayer === PieceColor.BLACK) {
       console.log("Lượt hiện tại là của đen, gọi AI đi...");
       setTimeout(() => {
         makeMoveAI(gameState);
       }, 500);
     }
-  }, []);
+  }, [playAgainstAI, gameState, makeMoveAI]);
 
   const toggleAI = useCallback((enabled: boolean) => {
     console.log("Bật/tắt AI:", enabled);
@@ -294,14 +293,35 @@ const Index = () => {
             <GameControls
               gameState={gameState}
               onNewGame={handleNewGame}
-              onFlipBoard={handleFlipBoard}
-              onUndoMove={handleUndoMove}
-              aiMode={playAgainstAI}
-              onToggleAI={toggleAI}
+              onUndo={handleUndoMove}
+              onReset={handleNewGame}
+              onDrawOffer={async () => false}
+              onResign={async () => { }}
+              isGameActive={!gameState.isCheckmate && !gameState.isStalemate}
+              isPlayerTurn={gameState.currentPlayer === PieceColor.WHITE}
+              canUndo={gameStateHistory.length > 1}
+              isAIEnabled={playAgainstAI}
+              onToggleAI={() => toggleAI(!playAgainstAI)}
               isThinking={isThinking}
             />
 
-            <GameInfo gameState={gameState} />
+            <GameInfo
+              whitePlayer={{
+                id: 'player',
+                displayName: 'Người chơi',
+                avatarUrl: profile?.avatar_url
+              }}
+              blackPlayer={{
+                id: 'ai',
+                displayName: 'AI Lỏ',
+                avatarUrl: undefined
+              }}
+              currentPlayer={gameState.currentPlayer}
+              whiteTime={0}
+              blackTime={0}
+              isGameActive={!gameState.isCheckmate && !gameState.isStalemate}
+              winner={gameState.isCheckmate ? (gameState.currentPlayer === PieceColor.WHITE ? 'ai' : 'player') : null}
+            />
 
             <MoveHistory gameState={gameState} />
           </motion.div>

@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { PieceColor } from '@/lib/chess-models';
 import { Button } from '@/components/ui/button';
-import { HelpCircle, Users, LogOut, UserPlus, RefreshCw, Clock, Trophy } from 'lucide-react';
+import { HelpCircle, Users, LogOut, UserPlus, RefreshCw, Clock, Trophy, MessageSquare } from 'lucide-react';
 import { toast } from "sonner";
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
@@ -247,7 +247,10 @@ const Lobby = () => {
     };
 
     const handleCreateRoom = () => {
-        createRoom({ timeLimit });
+        // Tạo một roomId ngẫu nhiên
+        const roomId = Math.random().toString(36).substring(2, 8);
+        // Chuyển hướng đến OnlineGame ngay lập tức
+        navigate(`/game/${roomId}`);
     };
 
     const handleJoinRoom = (roomId: string) => {
@@ -317,6 +320,17 @@ const Lobby = () => {
                                         <span className="hidden sm:inline">Tạo trận mới</span>
                                     </>
                                 )}
+                            </Button>
+
+                            <Button
+                                variant="default"
+                                size="sm"
+                                className="flex items-center gap-1"
+                                onClick={() => handleCreateRoom()}
+                                disabled={isCreatingGame}
+                            >
+                                <MessageSquare size={16} />
+                                <span className="hidden sm:inline">Tạo phòng chat</span>
                             </Button>
 
                             <Button
@@ -399,11 +413,11 @@ const Lobby = () => {
                                                         <div className="flex items-center gap-2">
                                                             <Avatar className="h-8 w-8">
                                                                 <AvatarImage src={game.white_player?.avatar_url || ''} alt={game.white_player?.username} />
-                                                                <AvatarFallback>{game.white_player?.username.substring(0, 2).toUpperCase()}</AvatarFallback>
+                                                                <AvatarFallback>{game.white_player?.username.substring(0, 2).toUpperCase() || 'WT'}</AvatarFallback>
                                                             </Avatar>
                                                             <div>
-                                                                <div className="font-medium">{game.white_player?.display_name || game.white_player?.username}</div>
-                                                                <div className="text-xs text-gray-400">{game.white_player?.rating} Elo</div>
+                                                                <div className="font-medium">{game.white_player?.display_name || game.white_player?.username || 'Chờ người chơi trắng'}</div>
+                                                                <div className="text-xs text-gray-400">{game.white_player?.rating || '1200'} Elo</div>
                                                             </div>
                                                         </div>
                                                     </TableCell>
@@ -411,11 +425,11 @@ const Lobby = () => {
                                                         <div className="flex items-center gap-2">
                                                             <Avatar className="h-8 w-8">
                                                                 <AvatarImage src={game.black_player?.avatar_url || ''} alt={game.black_player?.username || 'Chờ'} />
-                                                                <AvatarFallback>{game.black_player ? game.black_player.username.substring(0, 2).toUpperCase() : '?'}</AvatarFallback>
+                                                                <AvatarFallback>{game.black_player ? game.black_player.username.substring(0, 2).toUpperCase() : 'BK'}</AvatarFallback>
                                                             </Avatar>
                                                             <div>
-                                                                <div className="font-medium">{game.black_player?.display_name || game.black_player?.username || 'Đang chờ đối thủ...'}</div>
-                                                                <div className="text-xs text-gray-400">{game.black_player?.rating ? `${game.black_player.rating} Elo` : ''}</div>
+                                                                <div className="font-medium">{game.black_player?.display_name || game.black_player?.username || 'Chờ người chơi đen'}</div>
+                                                                <div className="text-xs text-gray-400">{game.black_player?.rating ? `${game.black_player.rating} Elo` : '1200 Elo'}</div>
                                                             </div>
                                                         </div>
                                                     </TableCell>

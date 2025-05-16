@@ -4,7 +4,6 @@ import { useAuth } from './AuthContext';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 
-// Define the server URL - adjust based on your deployment
 const SOCKET_SERVER_URL = import.meta.env.VITE_SOCKET_SERVER_URL || 'http://localhost:3005';
 
 interface Challenge {
@@ -64,96 +63,92 @@ export const SocketProvider = ({ children }: { children: React.ReactNode }) => {
     const reconnectAttempts = useRef(0);
     const MAX_RECONNECT_ATTEMPTS = 5;
     const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const [error, setError] = useState<string | null>(null);
+    const [roomId, setRoomId] = useState<string | null>(null);
+    const [gameData, setGameData] = useState<any>(null);
 
     const initializeSocket = useCallback(() => {
         if (!user) return;
 
-        console.log('Initializing socket connection');
-        const socket = io(SOCKET_SERVER_URL, {
-            transports: ['websocket', 'polling'],
-            reconnectionAttempts: MAX_RECONNECT_ATTEMPTS,
-            reconnectionDelay: 1000,
-            reconnectionDelayMax: 5000,
-            timeout: 20000,
-            forceNew: true,
+        console.log('Initializing socket connection...');
+        const newSocket = io(SOCKET_SERVER_URL, {
             auth: {
                 userId: user.id,
                 username: profile?.username || user.email,
-                displayName: profile?.display_name || profile?.username || user.email,
+                displayName: profile?.display_name,
                 avatarUrl: profile?.avatar_url
-            }
+            },
+            reconnection: true,
+            reconnectionAttempts: 5,
+            reconnectionDelay: 1000,
         });
 
-        socketRef.current = socket;
+        setSocket(newSocket);
+        socketRef.current = newSocket;
 
-        socket.on('connect', () => {
-            console.log('Connected to game server');
+        // Connection event handlers
+        newSocket.on('connect', () => {
+            console.log('Socket connected successfully');
             setIsConnected(true);
-            setSocket(socket);
-            reconnectAttempts.current = 0;
-            toast.success('Đã kết nối với máy chủ game');
-        });
+            setError(null);
 
-        socket.on('connect_error', (error) => {
-            console.error('Socket connection error:', error);
-            setIsConnected(false);
-            reconnectAttempts.current += 1;
-
-            if (reconnectAttempts.current <= MAX_RECONNECT_ATTEMPTS) {
-                toast.error(`Không thể kết nối với máy chủ. Đang thử lại... (${reconnectAttempts.current}/${MAX_RECONNECT_ATTEMPTS})`);
-                // Clear any existing timeout
-                if (reconnectTimeoutRef.current) {
-                    clearTimeout(reconnectTimeoutRef.current);
-                }
-                // Set new timeout for reconnection
-                reconnectTimeoutRef.current = setTimeout(() => {
-                    if (socket.disconnected) {
-                        socket.connect();
-                    }
-                }, 2000);
+            // If a room ID was provided, join that room
+            if (roomId) {
+                console.log('Joining room:', roomId);
+                newSocket.emit('joinRoom', { roomId });
             } else {
-                toast.error('Không thể kết nối với máy chủ. Vui lòng thử lại sau.');
+                // Otherwise, get the list of available rooms
+                console.log('Getting available rooms');
+                newSocket.emit('getRooms');
             }
         });
 
-        socket.on('disconnect', (reason) => {
-            console.log('Disconnected from game server:', reason);
+        newSocket.on('connect_error', (err) => {
+            console.error('Socket connection error:', err);
             setIsConnected(false);
-
-            // Only attempt to reconnect if it wasn't a server-initiated disconnect
-            if (reason !== 'io server disconnect' && reconnectAttempts.current < MAX_RECONNECT_ATTEMPTS) {
-                toast.warning('Mất kết nối với máy chủ. Đang thử kết nối lại...');
-                // Clear any existing timeout
-                if (reconnectTimeoutRef.current) {
-                    clearTimeout(reconnectTimeoutRef.current);
-                }
-                // Set new timeout for reconnection
-                reconnectTimeoutRef.current = setTimeout(() => {
-                    if (socket.disconnected) {
-                        socket.connect();
-                    }
-                }, 2000);
-            }
+            setError('Failed to connect to game server');
+            toast.error('Failed to connect to game server');
         });
 
-        // Challenge related event handlers
-        socket.on('challenge:received', (challenge: Challenge) => {
+        newSocket.on('disconnect', () => {
+            console.log('Socket disconnected');
+            setIsConnected(false);
+        });
+
+        // Handle game start event
+        newSocket.on('game:start', (gameData) => {
+            console.log('Game started:', gameData);
+            // Store game data
+            setGameData(gameData);
+            // Navigate to game page
+            navigate(`/game/${gameData.gameId}`);
+        });
+
+        // Handle challenge events
+        newSocket.on('challenge:received', (challenge) => {
+            console.log('Received challenge:', challenge);
             setReceivedChallenges(prev => [...prev, challenge]);
-            toast.info(`${challenge.challenger.displayName} đã thách đấu bạn!`);
+            toast.info(`${challenge.challenger.username} đã thách đấu bạn!`);
         });
 
-        socket.on('challenge:sent', (challenge: Challenge) => {
+        newSocket.on('challenge:sent', (challenge) => {
+            console.log('Challenge sent:', challenge);
             setPendingChallenges(prev => [...prev, challenge]);
-            toast.success(`Đã gửi lời thách đấu đến ${challenge.challenged.displayName}`);
+            toast.success(`Đã gửi lời thách đấu đến ${challenge.challenged.username}`);
         });
 
-        socket.on('challenge:accepted', (challenge: Challenge) => {
+        newSocket.on('challenge:error', (error) => {
+            console.error('Challenge error:', error);
+            toast.error(error.message || 'Có lỗi xảy ra khi xử lý thách đấu');
+        });
+
+        newSocket.on('challenge:accepted', (challenge: Challenge) => {
             setPendingChallenges(prev => prev.filter(c => c.id !== challenge.id));
             toast.success(`${challenge.challenged.displayName} đã chấp nhận thách đấu!`);
         });
 
         // Handle direct game room navigation for both players
-        socket.on('game:directStart', async (data: { roomId: string, gameState: any }) => {
+        newSocket.on('game:directStart', async (data: { roomId: string, gameState: any }) => {
             console.log('Game direct start:', data);
             try {
                 // First join the room and wait for confirmation
@@ -162,7 +157,7 @@ export const SocketProvider = ({ children }: { children: React.ReactNode }) => {
                         reject(new Error('Join room timeout'));
                     }, 5000);
 
-                    socket.emit('joinRoom', { roomId: data.roomId }, (response: any) => {
+                    newSocket.emit('joinRoom', { roomId: data.roomId }, (response: any) => {
                         clearTimeout(timeout);
                         if (response.success) {
                             resolve();
@@ -180,41 +175,38 @@ export const SocketProvider = ({ children }: { children: React.ReactNode }) => {
             }
         });
 
-        socket.on('challenge:declined', (challenge: Challenge) => {
+        newSocket.on('challenge:declined', (challenge: Challenge) => {
             setPendingChallenges(prev => prev.filter(c => c.id !== challenge.id));
             toast.info(`${challenge.challenged.displayName} đã từ chối thách đấu`);
         });
 
-        socket.on('challenge:cancelled', (challenge: Challenge) => {
+        newSocket.on('challenge:cancelled', (challenge: Challenge) => {
             setReceivedChallenges(prev => prev.filter(c => c.id !== challenge.id));
             toast.info(`${challenge.challenger.displayName} đã hủy thách đấu`);
         });
 
-        socket.on('challenge:expired', (challenge: Challenge) => {
+        newSocket.on('challenge:expired', (challenge: Challenge) => {
             setPendingChallenges(prev => prev.filter(c => c.id !== challenge.id));
             setReceivedChallenges(prev => prev.filter(c => c.id !== challenge.id));
             toast.info('Thách đấu đã hết hạn');
         });
 
-        return socket;
-    }, [user, profile, navigate]);
+        return newSocket;
+    }, [user, profile, navigate, roomId]);
 
     useEffect(() => {
-        const socket = initializeSocket();
+        if (!user) return;
 
+        const newSocket = initializeSocket();
+
+        // Cleanup on unmount
         return () => {
             console.log('Cleaning up socket connection');
-            if (reconnectTimeoutRef.current) {
-                clearTimeout(reconnectTimeoutRef.current);
-            }
-            if (socket) {
-                socket.off('connect');
-                socket.off('disconnect');
-                socket.off('connect_error');
-                socket.disconnect();
+            if (newSocket) {
+                newSocket.disconnect();
             }
         };
-    }, [initializeSocket]);
+    }, [user, initializeSocket]);
 
     const createRoom = (gameOptions = {}) => {
         if (!socket || !isConnected) {

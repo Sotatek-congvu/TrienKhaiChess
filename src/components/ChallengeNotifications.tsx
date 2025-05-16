@@ -36,11 +36,11 @@ export const ChallengeNotifications: React.FC = () => {
                             <Avatar className="h-10 w-10">
                                 <AvatarImage src={challenge.challenger.avatarUrl} />
                                 <AvatarFallback>
-                                    {challenge.challenger.displayName.substring(0, 2).toUpperCase()}
+                                    {challenge.challenger.username.substring(0, 2).toUpperCase()}
                                 </AvatarFallback>
                             </Avatar>
                             <div>
-                                <div className="font-medium">{challenge.challenger.displayName}</div>
+                                <div className="font-medium">{challenge.challenger.username}</div>
                                 <div className="text-sm text-gray-500">muốn thách đấu bạn</div>
                             </div>
                         </div>
@@ -76,11 +76,11 @@ export const ChallengeNotifications: React.FC = () => {
                             <Avatar className="h-10 w-10">
                                 <AvatarImage src={challenge.challenged.avatarUrl} />
                                 <AvatarFallback>
-                                    {challenge.challenged.displayName.substring(0, 2).toUpperCase()}
+                                    {challenge.challenged.username.substring(0, 2).toUpperCase()}
                                 </AvatarFallback>
                             </Avatar>
                             <div>
-                                <div className="font-medium">{challenge.challenged.displayName}</div>
+                                <div className="font-medium">{challenge.challenged.username}</div>
                                 <div className="text-sm text-gray-500">đang chờ phản hồi</div>
                             </div>
                         </div>
